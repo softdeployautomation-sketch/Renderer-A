@@ -70,7 +70,8 @@ jobs:
           CHANNELRY_R2_SECRET_ACCESS_KEY: ${{ secrets.CHANNELRY_R2_SECRET_ACCESS_KEY }}
           CHANNELRY_R2_PUBLIC_BASE_URL: ${{ secrets.CHANNELRY_R2_PUBLIC_BASE_URL }}
         run: |
-          # Render up to 3 jobs or up to 45 minutes, then stop so the
-          # ephemeral runner is reaped cleanly.
-          python -m renderer.main --max-jobs 3 --max-seconds 2700
+          # Render up to 3 jobs or up to 45 minutes. If the queue is empty for
+          # 5 consecutive polls (~15s) it exits early instead of burning the
+          # whole 45-minute cap polling nothing.
+          python -m renderer.main --max-jobs 3 --max-seconds 2700 --max-empty 5
           echo "render batch finished"

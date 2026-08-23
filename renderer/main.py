@@ -34,6 +34,10 @@ def main(argv: list[str] | None = None) -> int:
         "--max-seconds", type=float, default=0,
         help="Stop after N seconds (ephemeral runner); 0 = no time bound.",
     )
+    parser.add_argument(
+        "--max-empty", type=int, default=6,
+        help="Stop after N consecutive empty claims (0 = never). Empty queue exits fast.",
+    )
     parser.add_argument("--debug", action="store_true", help="Verbose logging.")
     args = parser.parse_args(argv)
 
@@ -48,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
             print("handled_job" if handled else "no_job", file=sys.stderr)
             return 0
         if args.max_jobs > 0:
-            run_batch(args.max_jobs, args.max_seconds or float("inf"))
+            run_batch(args.max_jobs, args.max_seconds or float("inf"), max_empty=args.max_empty)
             return 0
         run_forever()
         return 0

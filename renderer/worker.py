@@ -89,25 +89,37 @@ def run_forever(poll_seconds: float | None = None) -> None:
         time.sleep(poll)
 
 
-def run_batch(max_jobs: int, max_seconds: float) -> int:
-    """Render up to `max_jobs` / `max_seconds`, then exit.
+def run_batch(max_jobs: int, max_seconds: float, max_empty: int = 6) -> int:
+    """Render up to `max_jobs` / `max_seconds` / `max_empty`, whichever hits first.
 
     Ideal for an ephemeral GitHub-hosted runner: heartbeat + claim + render
     whatever is available, then end so the job finishes and the VM is torn
-    down. Returns how many jobs were handled.
+    down. `max_empty` stops after that many consecutive empty claims so an
+    empty queue exits in ~15s instead of burning the whole `max_seconds` cap
+    polling nothing. Returns how many jobs were handled.
     """
     handled = 0
+    empty_streak = 0
     start = time.monotonic()
     log.info(
-        "render batch started (id=%s, rembg=%s, max_jobs=%d, max_seconds=%.0f)",
-        config.WORKER_ID, backend_name(), max_jobs, max_seconds,
+        "render batch started (id=%s, rembg=%s, max_jobs=%d, max_seconds=%.0f, max_empty=%d)",
+        config.WORKER_ID, backend_name(), max_jobs, max_seconds, max_empty,
     )
     while handled < max_jobs and (time.monotonic() - start) < max_seconds:
         try:
             if run_once():
                 handled += 1
+                empty_streak = 0
+            else:
+                empty_streak += 1
+                if max_empty and empty_streak >= max_empty:
+                    log.info(
+                        "queue empty for %d consecutive polls — stopping early (id=%s)",
+                        empty_streak, config.WORKER_ID,
+                    )
+                    break
         except Exception:  # noqa: BLE001
             log.error("worker iteration failed:\n%s", traceback.format_exc())
         time.sleep(config.POLL_SECONDS)
-    log.info("batch finished — handled %d job(s)", handled)
+    log.info("batch finished — handled %d job(s), id=%s", handled, config.WORKER_ID)
     return handled

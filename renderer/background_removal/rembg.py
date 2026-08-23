@@ -32,7 +32,13 @@ def _has_rembg() -> bool:
         return False
     try:
         from rembg import remove  # noqa: F401
-        from rembg.bg import _load_models  # noqa: F401
+        # NOTE: only `from rembg import remove` is a stable, public entry point.
+        # Older drafts here also imported `from rembg.bg import _load_models` as
+        # a presence probe, but rembg 2.x moved that internal and the extra
+        # import made _has_rembg() throw -> silently fell back to passthrough
+        # (no background removal) even though `remove` was fully usable. That
+        # is exactly the bug that showed up live as "rembg unavailable — using
+        # passthrough" on the runner. Do NOT add internal-import probes back.
         return True
     except Exception:  # pragma: no cover - environment-dependent
         log.warning("rembg unavailable — using passthrough (no background removal)")
