@@ -70,8 +70,10 @@ jobs:
           CHANNELRY_R2_SECRET_ACCESS_KEY: ${{ secrets.CHANNELRY_R2_SECRET_ACCESS_KEY }}
           CHANNELRY_R2_PUBLIC_BASE_URL: ${{ secrets.CHANNELRY_R2_PUBLIC_BASE_URL }}
         run: |
-          # Render up to 3 jobs or up to 45 minutes. If the queue is empty for
-          # 5 consecutive polls (~15s) it exits early instead of burning the
-          # whole 45-minute cap polling nothing.
-          python -m renderer.main --max-jobs 3 --max-seconds 2700 --max-empty 5
+          # Drain the queue FIFO (claim returns the OLDEST queued job first),
+          # up to 10 jobs or 45 minutes per run. If the queue is empty for 5
+          # consecutive polls (~15s) it exits early instead of burning the
+          # whole cap polling nothing. The */10 cron re-triggers, so when a
+          # renderer is online it auto-generates the first job on the list.
+          python -m renderer.main --max-jobs 10 --max-seconds 2700 --max-empty 5
           echo "render batch finished"
