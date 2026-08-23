@@ -1,0 +1,14 @@
+# Core
+boto3>=1.34
+numpy>=1.26
+Pillow>=10.0
+
+# Voice synthesis (Microsoft Edge neural voices; matches Channelry's voice IDs)
+edge-tts>=6.1
+
+# Background removal — installs its own onnxruntime + u2net model on first use.
+# This is the heavy one (~170MB model download at runtime). Remove from a
+# minimal/Docker-tiny deployment by dropping this line and the renderer falls
+# back to passthrough (no background removal) rather than failing.
+rembg>=2.0
+onnxruntime>=1.17

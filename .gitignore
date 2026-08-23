@@ -1,0 +1,26 @@
+# secrets / env
+.env
+*.env
+!*.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# outputs / workspaces
+/tmp-render-*/
+workspace/
+
+# docker
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp

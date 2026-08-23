@@ -1,0 +1,13 @@
+# Keep build cruft out of the image.
+__pycache__
+*.pyc
+.git
+.venv
+venv
+workspace
+tests
+tmp-render-*
+.env
+.DS_Store
+.gitignore
+README.md
