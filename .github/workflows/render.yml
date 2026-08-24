@@ -71,9 +71,12 @@ jobs:
           CHANNELRY_R2_PUBLIC_BASE_URL: ${{ secrets.CHANNELRY_R2_PUBLIC_BASE_URL }}
         run: |
           # Drain the queue FIFO (claim returns the OLDEST queued job first),
-          # up to 10 jobs or 45 minutes per run. If the queue is empty for 5
-          # consecutive polls (~15s) it exits early instead of burning the
-          # whole cap polling nothing. The */10 cron re-triggers, so when a
-          # renderer is online it auto-generates the first job on the list.
-          python -m renderer.main --max-jobs 10 --max-seconds 2700 --max-empty 5
+          # one after another until the queue is empty. max-jobs 1000 is
+          # effectively "all of them" (a realistic cap well above volume); the
+          # batch stops when the queue has been empty for 5 consecutive polls
+          # (~15s) or the 45-minute max-seconds safety cap is hit. The Worker
+          # dispatches this workflow the moment a job is queued (GITHUB_PAT
+          # wake), so a freshly queued job starts rendering immediately, and
+          # this run keeps going to drain whatever else is already queued.
+          python -m renderer.main --max-jobs 1000 --max-seconds 2700 --max-empty 5
           echo "render batch finished"
