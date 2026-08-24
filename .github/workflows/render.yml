@@ -17,9 +17,12 @@ name: Render queued Channelry jobs
 on:
   workflow_dispatch:            # manual "Run workflow" button
   schedule:
-    # Development/low-volume volume — poll the queue on an interval. Adjust
-    # (or remove for purely manual dispatch) once volume grows.
-    - cron: "*/10 * * * *"
+    # Backup only (2026-08-24): the Cloudflare Worker now wakes Renderer-A via
+    # workflow_dispatch the moment ANY job is queued (reliable 2-min heartbeat),
+    # so this hourly schedule is just a safety net for jobs that somehow slip
+    # through the wake (e.g. a dispatch failure). Hourly keeps the ephemeral
+    # runner from spinning up empty every 10 min when the queue is quiet.
+    - cron: "17 * * * *"
 
 jobs:
   render:
