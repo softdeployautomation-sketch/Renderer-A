@@ -152,6 +152,39 @@ def render_single_character(job_id: str, job: dict, method: str) -> tuple[str, l
     url = cloud.upload_video(job_id, final_path)
     snapshot = [{"index": 0, "background": bg_url, "characters": [entry["name"]], "line": dialogue}]
     return url, snapshot
+
+
+def render_character_cutout(job_id: str, job: dict) -> tuple[str, list]:
+    """Background-remove a raw character image and store a transparent PNG.
+
+    Cutout-first (2026-08-24): the backend enqueues a `character_cutout` job per
+    auto-generated character (settings carry `image_url` / `r2_key` / `gallery_id`).
+    We download the raw image, run RemBG, and upload the transparent PNG back to
+    R2 at `settings.r2_key` (so it lands in the character gallery as a real
+    cutout, not the plain-background raw). No voice / ffmpeg involved — this is a
+    pure image -> cutout -> R2 step. The backend PATCH completion handler points
+    that saved_artworks row at the new key. Returns (uploaded_public_url, []).
+    """
+    settings = parse_settings(job)
+    url = str(settings.get("image_url") or "").strip()
+    if not url:
+        raise RenderJobError("character_cutout job has no image_url to cut")
+    r2_key = str(settings.get("r2_key") or "").strip() or (
+        f"uploads/character-cutout/{job_id}.png"
+    )
+
+    ws = assets.make_workspace(job_id)
+    raw = _download(url, ws, "char")
+    img = Image.open(raw).convert("RGBA")
+    removed = background_removal.remove_background(img)
+    out = ws / "cutout.png"
+    removed.save(out)
+
+    public = cloud.upload_file(str(out), r2_key, content_type="image/png")
+    log.info("character_cutout %s -> %s", job_id, r2_key)
+    return public, []
+
+
 def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
     """Render a character_video + auto_cast job.
 

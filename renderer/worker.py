@@ -18,7 +18,7 @@ log = logging.getLogger("render.worker")
 
 # Methods this worker can render. Reported in the heartbeat meta so the queue
 # can later select a capable renderer (plan §25) without the frontend caring.
-SUPPORTED_METHODS = ("character_video", "still", "walk")
+SUPPORTED_METHODS = ("character_video", "still", "walk", "character_cutout")
 
 
 def capabilities() -> dict:
@@ -42,6 +42,15 @@ def handle_job(job: dict) -> None:
     cloud.report(job_id, "rendering", 2, progress_step="asset download")
 
     try:
+        if method == "character_cutout":
+            # pure image cutout -> transparent PNG -> R2 (no video/voice/ffmpeg)
+            url, snapshot = render.render_character_cutout(job_id, job)
+            cloud.report(
+                job_id, "done", 100, "uploading cutout",
+                video_url=url, scene_snapshot=snapshot,
+            )
+            log.info("job %s CUTOUT COMPLETED -> %s", job_id, url)
+            return
         if method == "character_video":
             url, snapshot = render.render_character_video(job_id, job)
         elif method in ("still", "walk"):
