@@ -32,6 +32,97 @@ def _letterbox_bg(path: str | None, w: int, h: int, color=(8, 8, 14, 255)) -> Im
     return bg
 
 
+def _wrap_text(text: str, font, max_w: int) -> list[str]:
+    """Naive word-wrap using a PIL font's getlength (no external deps)."""
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    cur = ""
+    for w_ in words:
+        trial = f"{cur} {w_}".strip()
+        if font.getbbox(trial)[2] <= max_w:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w_
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def compose_title_card(
+    background_path: str | None,
+    title: str,
+    subtitle: str = "",
+    position: str = "center",
+    w: int = 1280,
+    h: int = 720,
+) -> Image.Image:
+    """Render a title-card frame: background + centered title/subtitle text.
+
+    Mirrors the classic `sceneTitleCardCard` data model (title/subtitle/
+    position: center | top | lower_third). No characters, no audio.
+    """
+    frame = _letterbox_bg(background_path, w, h)
+    draw = ImageDraw.Draw(frame)
+
+    # Scrim so text stays readable over any background.
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    od.rectangle([0, 0, w, h], fill=(8, 8, 14, 120))
+    frame.alpha_composite(overlay)
+
+    title_font = _load_font(max(20, w // 24))
+    sub_font = _load_font(max(14, w // 42))
+
+    def _text_h(font, text: str) -> int:
+        try:
+            return font.getbbox(text)[3] - font.getbbox(text)[1]
+        except Exception:
+            return int(font.size)
+
+    def _draw_lines(lines, font, start_y, fill, gap) -> int:
+        cur = start_y
+        for ln in lines:
+            bbox = font.getbbox(ln)
+            tw = bbox[2] - bbox[0]
+            draw.text(((w - tw) // 2, cur), ln, font=font, fill=fill)
+            cur += _text_h(font, ln) + gap
+        return cur
+
+    title_lines = _wrap_text(title or "", title_font, int(w * 0.82))
+    sub_lines = _wrap_text(subtitle or "", sub_font, int(w * 0.8))
+
+    # Vertical placement depending on position.
+    if position == "top":
+        yd = int(h * 0.14)
+    elif position == "lower_third":
+        yd = int(h * 0.66)
+    else:  # center
+        # roughly center the title block around the middle
+        title_h = sum(_text_h(title_font, ln) + 6 for ln in title_lines) if title_lines else 0
+        yd = max(0, int((h - title_h) / 2) - int(h * 0.05))
+
+    cur_y = _draw_lines(title_lines, title_font, yd, (255, 255, 255, 255), 6)
+    if sub_lines:
+        cur_y += _text_h(sub_font, "Myg")
+        _draw_lines(sub_lines, sub_font, cur_y, (226, 220, 245, 255), 4)
+    return frame.convert("RGB")
+
+
+def _load_font(size: int):
+    """Best-effort PIL truetype font fallback."""
+    from PIL import ImageFont
+    for name in ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf", "Arial.ttf", "arial.ttf"):
+        try:
+            return ImageFont.truetype(name, max(14, size))
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
 def _place_character(
     bg: Image.Image,
     char_img: Image.Image,

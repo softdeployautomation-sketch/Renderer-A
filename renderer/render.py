@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image
 
 from . import assets, background_removal, cloud, config, ffmpeg, voice
-from .video import compose_scene
+from .video import compose_scene, compose_title_card
 
 log = logging.getLogger("render.pipeline")
 
@@ -38,12 +38,32 @@ def _download(url: str, ws: Path, prefix: str) -> str:
 
 
 def _cut_character(char: dict, ws: Path, cache: dict):
-    """Background-remove a character image (cached by URL)."""
+    """Background-remove a character image (cached by URL).
+
+    Skips re-cutting when the image URL already points at a transparent cutout
+    (contains '/character-cutout/' or '-cutout') e.g. a character pre-cut in a
+    prior flow — the backend enqueues `character_cutout` jobs for fresh auto-cast
+    characters, so at render time prefer that asset instead of re-removing.
+    """
     url = (char or {}).get("image_url") or ""
     if not url:
         return None
     if url in cache:
         return cache[url]
+
+    is_precut = "/character-cutout/" in url or "/character-cutouts/" in url
+    base_name = (char or {}).get("name") or "character"
+    if is_precut:
+        raw = _download(url, ws, "char")
+        entry = {
+            "path": str(raw),
+            "name": base_name,
+            "x": float((char or {}).get("x", 0.5)),
+            "y": float((char or {}).get("y", 0.92)),
+            "scale": float((char or {}).get("scale", 0.6)),
+        }
+        cache[url] = entry
+        return entry
 
     raw = _download(url, ws, "char")
     img = Image.open(raw).convert("RGBA")
@@ -53,10 +73,13 @@ def _cut_character(char: dict, ws: Path, cache: dict):
 
     entry = {
         "path": str(out),
-        "name": (char or {}).get("name") or "character",
+        "name": base_name,
         "x": float((char or {}).get("x", 0.5)),
         "y": float((char or {}).get("y", 0.92)),
         "scale": float((char or {}).get("scale", 0.6)),
+        "motion_style": (char or {}).get("motion_style") or "idle",
+        "gesture_start": float((char or {}).get("gesture_start") or 0),
+        "gesture_duration": float((char or {}).get("gesture_duration") or 0),
     }
     cache[url] = entry
     return entry
@@ -203,6 +226,25 @@ def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
     w, h = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
 
     for idx, beat in enumerate(beats):
+        # Title-card first (2026-08-25): a beat flagged is_title_card has no
+        # characters — render the background + centered title/subtitle text as a
+        # static intro scene FIRST (the backend unshifts it to the head).
+        if beat.get("is_title_card"):
+            bg_url = str(beat.get("background_url") or "").strip()
+            bg_path = _download(bg_url, ws, "bg") if bg_url else None
+            title = str(beat.get("title") or beat.get("text") or "").strip() or "Your story"
+            subtitle = str(beat.get("subtitle") or "").strip()
+            position = str(beat.get("position") or "center")
+            duration = max(2, min(20, int(float(beat.get("duration") or 4))))
+            frame = compose_title_card(bg_path, title, subtitle, position, w, h)
+            frame_path = ws / "clips" / f"title-{idx}.png"
+            frame.save(frame_path)
+            clip_path = ws / "clips" / f"title-{idx}.mp4"
+            ffmpeg.encode_scene_clip(str(frame_path), None, str(clip_path), w, h, duration=duration)
+            clips.append(str(clip_path))
+            snapshot.append({"index": idx, "kind": "title_card", "title": title})
+            continue
+
         # 1) background
         bg_url = str(beat.get("background_url") or "").strip()
         bg_path = _download(bg_url, ws, "bg") if bg_url else None
