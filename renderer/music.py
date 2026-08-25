@@ -33,7 +33,9 @@ MOOD_DRONES: dict[str, list[float]] = {
     "eight_bit":     [220.0, 329.63, 440.0],
 }
 
-# Level the bed is mixed at under the dialogue.
+# Level the bed is mixed at under the dialogue. The renderer reads the job's
+# `settings.music_volume` (0..1) when present (frontend music-volume control);
+# this is the default when the frontend doesn't send one.
 MUSIC_MIX_VOLUME = 0.22
 
 
@@ -74,16 +76,18 @@ def synth_bed(duration: float, mood: str, out_path: str) -> str | None:
     return out_path
 
 
-def mix_music(video_path: str, music_path: str | None, out_path: str) -> str:
-    """amix the music bed under the video's dialogue audio at low volume."""
+def mix_music(video_path: str, music_path: str | None, out_path: str,
+              volume: float | None = None) -> str:
+    """amix the music bed under the video's dialogue audio at lower than default."""
     if not music_path or not os.path.exists(music_path):
         return video_path
+    mix = MUSIC_MIX_VOLUME if volume is None else max(0.0, min(1.0, float(volume)))
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
         "-i", music_path,
         "-filter_complex",
-        f"[1:a]volume={MUSIC_MIX_VOLUME}[mus];[0:a][mus]amix=inputs=2:duration=first:dropout_transition=2[a]",
+        f"[1:a]volume={mix}[mus];[0:a][mus]amix=inputs=2:duration=first:dropout_transition=2[a]",
         "-map", "0:v", "-map", "[a]",
         "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
         "-movflags", "+faststart",

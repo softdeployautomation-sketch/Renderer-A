@@ -319,13 +319,16 @@ def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
     ffmpeg.concat_clips(clips, final_path, w, h)
 
     # 6b) Background music (Class B): mix the mood bed under the dialogue.
-    #     Synthesized to the exact final duration and amixed at low volume.
+    #     Synthesized to the exact final duration and amixed at the level the
+    #     frontend chose (`settings.music_volume`, 0..1) or the default.
     music_mood = str(settings.get("music") or "").strip()
     if music_mood:
         bed_path = str(ws / "music-bed.wav")
         if music.synth_bed(_video_duration(final_path), music_mood, bed_path):
             mixed_path = str(ws / "final-with-music.mp4")
-            music.mix_music(final_path, bed_path, mixed_path)
+            mv = settings.get("music_volume")
+            music.mix_music(final_path, bed_path, mixed_path,
+                            volume=None if mv is None else float(mv))
             shutil.copyfile(mixed_path, final_path)
 
     # 7) upload to R2 -> public URL
