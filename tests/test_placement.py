@@ -10,11 +10,14 @@ Verifies `_place_character` uses the SAME coordinate convention as the editors
 This guards the 2026-08-25 fix: the renderer previously treated y as a bottom-UP
 anchor (feet_y = h*(1-y)), which vertically mirrored the character so a character
 dragged to the bottom (y=0.92) rendered near the TOP — the root cause of
-"dragged positions don't persist in the video".
+"dragged positions don't persist in the video". It also guards the 2026-08-25
+repeat-character cache fix (the same character URL across scenes keeps its own
+per-scene x/y/scale instead of always using the first scene's).
 
 Run: python tests/test_placement.py   (needs Pillow)
 """
 import sys
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,6 +25,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from PIL import Image
 
 from renderer.video import _place_character
+
+# Stub out the heavy runtime deps that renderer/render.py pulls in transitively
+# (cloud->boto3, ffmpeg, music, voice, assets, background_removal, config) so this
+# test runs offline against the real _cut_character/_character_entry code — none
+# of them are exercised by the cache logic under test.
+import renderer  # noqa: E402
+for _name in ("assets", "background_removal", "cloud", "config", "ffmpeg", "music", "voice"):
+    sys.modules.setdefault(f"renderer.{_name}", types.ModuleType(f"renderer.{_name}"))
+
+from renderer.render import _cut_character  # noqa: E402
 
 
 def _bbox(img):
@@ -74,6 +87,32 @@ def main():
     # Regression guard: THE OLD buggy formula put y=0.92 at the TOP.
     old = int(100 * (1.0 - 0.92))  # = 8 (near top)
     assert old < 50, "sanity: old bottom-up formula placed y=0.92 near top"
+
+    # ── 2026-08-25 repeat-character cache regression ────────────────────────
+    # The SAME character image URL recurs across scenes, but each scene has its
+    # OWN x/y/scale. Previously _cut_character cached the WHOLE entry (incl. x/y)
+    # keyed by URL, so a later scene got the FIRST scene's placement back.
+    url = "/character-cutout/hero.png"
+    # Seed the cache as if the character was first rendered at a far-left/top spot.
+    cache = {url: {"path": "/tmp/already-cut.png"}}
+    first = _cut_character(
+        {"image_url": url, "name": "Hero", "x": 0.1, "y": 0.1, "scale": 0.5},
+        None,  # ws unused on the cache-hit branch
+        cache,
+    )
+    # Now the "same" character appears in a LATER scene dragged to the bottom-right.
+    later = _cut_character(
+        {"image_url": url, "name": "Hero", "x": 0.9, "y": 0.92, "scale": 0.8},
+        None,
+        cache,
+    )
+    # The cached branch must rebuild the entry from the CURRENT beat, not reuse
+    # the first scene's placement (the old code would return first's x/y here).
+    print(f"cache-hit: x={later['x']} y={later['y']} scale={later['scale']} "
+          f"(expected x=0.9 y=0.92 s=0.8, NOT first scene 0.1/0.1/0.5)")
+    assert later["x"] == 0.9 and later["y"] == 0.92 and later["scale"] == 0.8, \
+        "cache hit returned the character's FIRST-scene placement, not the current scene's"
+    assert first["x"] == 0.1, "first (cache-miss) placement should keep its own values"
 
     print("ALL PLACEMENT TESTS PASS")
 

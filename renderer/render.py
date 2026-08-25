@@ -51,31 +51,57 @@ def _download(url: str, ws: Path, prefix: str) -> str:
     return assets.download_asset(url, ws, prefix)
 
 
+def _character_entry(path: str, char: dict) -> dict:
+    """Build a placed-character entry from a cut image + the CURRENT beat's char.
+
+    x/y/scale/motion are ALWAYS taken from the caller's `char`, never from a cache,
+    because the same character image URL appears in many scenes with DIFFERENT
+    per-scene placements. Returning a cached copy of x/y would render every later
+    scene at the character's FIRST-seen position (see _cut_character below).
+    """
+    base_name = (char or {}).get("name") or "character"
+    return {
+        "path": path,
+        "name": base_name,
+        "x": float((char or {}).get("x", 0.5)),
+        "y": float((char or {}).get("y", 0.92)),
+        "scale": float((char or {}).get("scale", 0.6)),
+        "motion_style": (char or {}).get("motion_style") or "idle",
+        "gesture_start": float((char or {}).get("gesture_start") or 0),
+        "gesture_duration": float((char or {}).get("gesture_duration") or 0),
+    }
+
+
 def _cut_character(char: dict, ws: Path, cache: dict):
-    """Background-remove a character image (cached by URL).
+    """Background-remove a character image (the cut-IMAGE is cached by URL).
 
     Skips re-cutting when the image URL already points at a transparent cutout
-    (contains '/character-cutout/' or '-cutout') e.g. a character pre-cut in a
-    prior flow — the backend enqueues `character_cutout` jobs for fresh auto-cast
-    characters, so at render time prefer that asset instead of re-removing.
+    (contains '/character-cutout/' or 'character-cutouts/') so a character pre-cut
+    in a prior flow is reused — the backend enqueues `character_cutout` jobs for
+    fresh auto-cast characters, so at render time prefer that asset instead of
+    re-removing the background.
+
+    FIX (2026-08-25): previously the WHOLE entry (including x/y/scale) was cached by
+    URL and returned on a cache hit. The same character URL recurs across scenes, so
+    a later scene got the FIRST scene's placement back — "dragged position doesn't
+    reflect; video shows the first position." Now only the cut-asset PATH is reused
+    from the cache; the returned entry is rebuilt from the current beat so each scene
+    keeps its own x/y/scale/motion.
     """
     url = (char or {}).get("image_url") or ""
     if not url:
         return None
-    if url in cache:
-        return cache[url]
+
+    # Reuse an already-cut asset for this URL but ALWAYS apply the current
+    # beat's per-scene placement/action.
+    cached = cache.get(url) if isinstance(cache, dict) else None
+    if cached and cached.get("path"):
+        return _character_entry(cached["path"], char)
 
     is_precut = "/character-cutout/" in url or "/character-cutouts/" in url
-    base_name = (char or {}).get("name") or "character"
     if is_precut:
         raw = _download(url, ws, "char")
-        entry = {
-            "path": str(raw),
-            "name": base_name,
-            "x": float((char or {}).get("x", 0.5)),
-            "y": float((char or {}).get("y", 0.92)),
-            "scale": float((char or {}).get("scale", 0.6)),
-        }
+        entry = _character_entry(str(raw), char)
         cache[url] = entry
         return entry
 
@@ -85,16 +111,7 @@ def _cut_character(char: dict, ws: Path, cache: dict):
     out = ws / "assets" / f"cut-{len(cache)}.png"
     removed.save(out)
 
-    entry = {
-        "path": str(out),
-        "name": base_name,
-        "x": float((char or {}).get("x", 0.5)),
-        "y": float((char or {}).get("y", 0.92)),
-        "scale": float((char or {}).get("scale", 0.6)),
-        "motion_style": (char or {}).get("motion_style") or "idle",
-        "gesture_start": float((char or {}).get("gesture_start") or 0),
-        "gesture_duration": float((char or {}).get("gesture_duration") or 0),
-    }
+    entry = _character_entry(str(out), char)
     cache[url] = entry
     return entry
 def _scene_characters(beat: dict, ws: Path, cache: dict) -> list:
