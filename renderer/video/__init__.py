@@ -132,9 +132,17 @@ def _place_character(
 ) -> None:
     """Composite `char_img` (RGBA, transparent bg) onto `bg`.
 
-    x is a left-anchor (0..1) of the character's width position; y is a
-    bottom-anchor (0..1) of where the character's feet sit relative to the
-    background height.
+    FIX (2026-08-25): x/y now use the SAME convention as the editors
+    (classic dashboard.html + new video-tab.html placement canvas).
+    In the editor each character is drawn with CSS
+    `left:{x*100}%; top:{y*100}%; transform:translate(-50%,-100%)`, so:
+      - x is the horizontal CENTER of the character (0..1 fraction of width), and
+      - y is the top-anchor of where the character's FEET sit (0..1 fraction of
+        height DOWN from the top; y=0.92 => near the bottom of the frame).
+    Previously this renderer treated y as a bottom-UP anchor (`h*(1-y)`) which
+    mirrored the character vertically (y=0.92 rendered near the TOP) — the root
+    cause of "dragged position not persisting in the video" since both editors
+    send top-anchor values.
     """
     w, h = bg.size
     # Character height is a fraction of the canvas driven by `scale`.
@@ -144,10 +152,18 @@ def _place_character(
     ch = max(1, target_h)
     resized = char_img.resize((cw, ch), Image.LANCZOS)
 
-    px = int((w - cw) * max(0.0, min(1.0, x)))
-    # bottom anchor: feet sit at y fraction of the canvas height.
-    feet_y = int(h * (1.0 - max(0.0, min(1.0, y))))
-    py = max(0, feet_y - ch)
+    cx = max(0.0, min(1.0, float(x)))
+    cy = max(0.0, min(1.0, float(y)))
+
+    # Center the character horizontally on the `x` fraction (matches editor
+    # translate(-50%)). Clamp so it always stays inside the frame.
+    px = int(w * cx - cw / 2.0)
+    px = max(0, min(w - cw, px))
+
+    # Feet anchored at the `y` fraction measured DOWN from the top (matches
+    # editor translate(-100%): the box's bottom edge sits at y*100% from top).
+    feet_y = int(h * cy)
+    py = max(0, min(h - ch, feet_y - ch))
 
     bg.alpha_composite(resized, (px, py))
 
