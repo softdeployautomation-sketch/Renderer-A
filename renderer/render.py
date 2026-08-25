@@ -9,14 +9,28 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 
 from PIL import Image
 
-from . import assets, background_removal, cloud, config, ffmpeg, voice
+from . import assets, background_removal, cloud, config, ffmpeg, music, voice
 from .video import compose_scene, compose_title_card
 
 log = logging.getLogger("render.pipeline")
+
+
+def _video_duration(path: str) -> float:
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            capture_output=True, timeout=30,
+        )
+        return max(0.0, float(r.stdout.strip()))
+    except Exception:
+        return 0.0
 
 
 class RenderJobError(Exception):
@@ -278,8 +292,14 @@ def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
         frame.save(frame_path)
 
         # 5) encode this scene as a clip (frame + dialogue audio).
+        #    Per-scene timing (Class B): honor beat.duration so a scene length
+        #    isn't just the dialogue's length or a fixed 5s default.
+        scene_dur = beat.get("duration")
         clip_path = ws / "clips" / f"scene-{idx}.mp4"
-        ffmpeg.encode_scene_clip(str(frame_path), audio_path, str(clip_path), w, h)
+        ffmpeg.encode_scene_clip(
+            str(frame_path), audio_path, str(clip_path), w, h,
+            duration=float(scene_dur) if scene_dur else None,
+        )
         clips.append(str(clip_path))
 
         snapshot.append(
@@ -297,6 +317,16 @@ def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
     # 6) concat scenes -> final.mp4
     final_path = str(ws / "final.mp4")
     ffmpeg.concat_clips(clips, final_path, w, h)
+
+    # 6b) Background music (Class B): mix the mood bed under the dialogue.
+    #     Synthesized to the exact final duration and amixed at low volume.
+    music_mood = str(settings.get("music") or "").strip()
+    if music_mood:
+        bed_path = str(ws / "music-bed.wav")
+        if music.synth_bed(_video_duration(final_path), music_mood, bed_path):
+            mixed_path = str(ws / "final-with-music.mp4")
+            music.mix_music(final_path, bed_path, mixed_path)
+            shutil.copyfile(mixed_path, final_path)
 
     # 7) upload to R2 -> public URL
     url = cloud.upload_video(job_id, final_path)
