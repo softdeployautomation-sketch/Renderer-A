@@ -15,10 +15,14 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import assets, background_removal, cloud, config, ffmpeg, music, voice
+from . import animate, assets, background_removal, cloud, config, ffmpeg, music, voice
 from .video import compose_scene, compose_title_card
 
 log = logging.getLogger("render.pipeline")
+
+# Frames-per-second for animated scenes. Kept in sync with ffmpeg's hardcoded
+# fps=30 so an animated clip concats cleanly with the still/title clips.
+ANIM_FPS = 30
 
 
 def _video_duration(path: str) -> float:
@@ -295,28 +299,76 @@ def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
                 dialogue, voice_id, str(ws / "clips" / f"voice-{idx}.mp3")
             )
 
-        # 4) compose the full scene frame.
-        frame = compose_scene(
-            bg_path,
-            [
-                {"path": e["path"], "x": e["x"], "y": e["y"], "scale": e["scale"]}
-                for e in scene_chars
-            ],
-            w,
-            h,
-        )
-        frame_path = ws / "clips" / f"frame-{idx}.png"
-        frame.save(frame_path)
-
-        # 5) encode this scene as a clip (frame + dialogue audio).
-        #    Per-scene timing (Class B): honor beat.duration so a scene length
-        #    isn't just the dialogue's length or a fixed 5s default.
-        scene_dur = beat.get("duration")
+        # 4/5) compose + encode this scene as a clip (face + audio).
+        #    Animated path (2026-08-26): when a character speaks we render a
+        #    real frame sequence -- mouth lip-sync (audio-energy jaw-drop) plus
+        #    whole-body motion from the beat's action/motion_style -- instead of
+        #    a single frozen still. Silent/title scenes still use the static loop.
         clip_path = ws / "clips" / f"scene-{idx}.mp4"
-        ffmpeg.encode_scene_clip(
-            str(frame_path), audio_path, str(clip_path), w, h,
-            duration=float(scene_dur) if scene_dur else None,
-        )
+        scene_dur_raw = beat.get("duration")
+        dur_override = float(scene_dur_raw) if scene_dur_raw else None
+
+        if dialogue and audio_path and scene_chars:
+            # Per-scene timing (Class B): honor beat.duration, else audio+
+            # a short silent tail (mirrors encode_scene_clip's default).
+            scene_dur = dur_override or (_video_duration(str(audio_path)) + 0.3)
+            scene_dur = max(0.4, min(config.MAX_VIDEO_SECONDS * 60, scene_dur))
+
+            # Which character is talking: the one with its own per-character
+            # dialogue, else the first character (beat-level dialogue belongs to
+            # the scene's speaker in the new auto_cast flow). scene_chars keeps
+            # the same order as beat.characters (see _scene_characters).
+            raw_chars = beat.get("characters") or []
+            speaker_idx = 0
+            for i, c in enumerate(raw_chars):
+                if str((c or {}).get("dialogue") or "").strip():
+                    speaker_idx = i
+                    break
+            speaker_ch = raw_chars[speaker_idx] if speaker_idx < len(raw_chars) else {}
+            try:
+                speaker_pos = scene_chars.index(scene_chars[speaker_idx]) if len(scene_chars) > speaker_idx else 0
+            except (IndexError, ValueError):
+                speaker_pos = 0
+            # Action defaults to the beat's (auto_cast sets action='speaking').
+            beat_action = str(beat.get("action") or speaker_ch.get("action") or "").strip()
+
+            anim_chars = []
+            for pos, e in enumerate(scene_chars):
+                anim_chars.append({
+                    "path": e["path"], "x": e["x"], "y": e["y"], "scale": e["scale"],
+                    "name": e["name"],
+                    "action": beat_action or e.get("action") or "speaking",
+                    "intensity": float(e.get("intensity", 0.5)),
+                    "is_speaker": (pos == speaker_pos),
+                })
+
+            frame_dir = ws / "clips" / f"frames-{idx}"
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            openness = animate.audio_openness_curve(str(audio_path), ANIM_FPS)
+            animate.render_beat_frames(
+                bg_path, anim_chars, w, h, ANIM_FPS,
+                float(scene_dur), openness, str(frame_dir), "frame",
+            )
+            ffmpeg.encode_frame_sequence(
+                str(frame_dir), "frame%05d.png", ANIM_FPS,
+                str(audio_path), str(clip_path), w, h,
+            )
+        else:
+            frame = compose_scene(
+                bg_path,
+                [
+                    {"path": e["path"], "x": e["x"], "y": e["y"], "scale": e["scale"]}
+                    for e in scene_chars
+                ],
+                w,
+                h,
+            )
+            frame_path = ws / "clips" / f"frame-{idx}.png"
+            frame.save(frame_path)
+            ffmpeg.encode_scene_clip(
+                str(frame_path), audio_path, str(clip_path), w, h,
+                duration=dur_override,
+            )
         clips.append(str(clip_path))
 
         snapshot.append(
