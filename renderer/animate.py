@@ -13,12 +13,16 @@ numpy + ffmpeg):
 * **Audio-energy lip-sync** -- the speaker's dialogue MP3 is decoded to a mono
   PCM envelope; per-frame RMS is normalised to a mouth "openness" 0..1 curve.
   No external phoneme/viseme tool needed, and it degrades to silence=closed.
-* **Jaw-drop mouth shape** -- port of the sidecar's ``_apply_mouth_shape`` (the
-  lower half of the mouth region translates down, revealing a soft dark gap),
-  applied to the speaker's cutout each frame.
+* **Mouth-opening lip-sync** -- a real open-**mouth** shape (lips part, a dark
+  opening ellipse whose height/darkness scale with openness) is drawn centred on
+  the mouth band each frame. This is applied to the SPEAKER only. (2026-08-26:
+  replaced the jaw-translate approach that read as "mouth moving on the jaw".)
 * **Whole-body scene motion** -- the sidecar's ``SCENE_MOTION_STYLES`` table
   (idle / sway / bounce / nod / vibrate / still / walk_in_place) translated +
-  rotated per frame, so characters stay "alive" even when a style isn't set.
+  rotated per frame. Body motion is OPT-IN: plain speaking maps to ``idle`` so a
+  talking character's body stays still (only lips move); bounce/nod/walk/etc.
+  only happen via an explicit action tag (owner: "that should be an added
+  action, it shouldn't just happen").
 
 Every step is defensive: if the mouth region heuristic misses (non-human /
 profile / costume), if audio can't be decoded, or if `motion_style` is unknown,
@@ -35,8 +39,12 @@ import subprocess
 from PIL import Image, ImageDraw
 
 # Reuse the same letterbox helper as the static composer so an animated scene
-# matches (frame-for-frame) what the still path produced.
-from .video import _letterbox_bg
+# matches (frame-for-frame) what the still path produced. `visible_bbox` /
+# `resize_cutout_to_visible_height` keep the animated path's size semantics in
+# lock-step with the static composer: `scale` names the VISIBLE body height so
+# a padded cutout doesn't render small, and the feet anchor on the visible
+# character's bottom (not the transparent margin).
+from .video import _letterbox_bg, resize_cutout_to_visible_height
 
 log = logging.getLogger("render.animate")
 
@@ -55,11 +63,22 @@ SCENE_MOTION_STYLES = {
 
 # Map a beat's free-text `action` (the "[action: ...]" script tag; defaults to
 # 'speaking') onto a real whole-body motion style so the user's action tags
-# change what the character does, not just whether the mouth moves.
+# change what the character does.
+#
+# 2026-08-26 (owner-reported regression): talking/unknown defaults to **idle**,
+# NOT sway — the speaker's whole body should not bounce just because they talk
+# ("the speaker keeps bouncing — that should be an added action, it shouldn't
+# just happen"). Bouncing/nodding/walking/etc. only happen via an explicit
+# action tag; plain speaking leaves the body still and only the mouth moves
+# (the audio-driven lip-sync).
 _ACTION_TO_STYLE = {
-    "speaking": "sway",
-    "talking": "sway",
-    "speech": "sway",
+    # Speech family -> body still; mouth animates only. No auto-bounce/sway.
+    "speaking": "idle",
+    "speak": "idle",
+    "talking": "idle",
+    "speech": "idle",
+    "talk": "idle",
+    # Explicit gesture-y actions -> gentle whole-body motion (opt-in).
     "gesturing": "sway",
     "gesture": "sway",
     "point": "sway",
@@ -68,10 +87,13 @@ _ACTION_TO_STYLE = {
     "waving": "sway",
     "hand on head": "sway",
     "hand_on_head": "sway",
+    # Explicit body actions.
     "nod": "nod",
     "nodding": "nod",
     "bounce": "bounce",
     "bouncing": "bounce",
+    "dance": "bounce",
+    "dancing": "bounce",
     "vibrate": "vibrate",
     "vibrating": "vibrate",
     "walk": "walk_in_place",
@@ -87,7 +109,9 @@ def resolve_motion_style(char: dict, is_speaker: bool) -> str:
 
     Priority: an explicit `motion_style` (if it's one we know) -> a mapped
     `action` word -> a speaker/bystander default. Unknown names fall back to
-    "speaker sway" / "idle" (never hard-fail, never freeze).
+    stillness (`idle`) for BOTH roles — body motion is opt-in via an action tag,
+    and speaking alone must not make a character bounce/sway. (2026-08-26). The
+    speaker's lips still move from the audio; only their whole body stays still.
     """
     ms = str((char or {}).get("motion_style") or "").strip().lower()
     if ms in SCENE_MOTION_STYLES:
@@ -96,7 +120,7 @@ def resolve_motion_style(char: dict, is_speaker: bool) -> str:
     for key, style in _ACTION_TO_STYLE.items():
         if key in act:
             return style
-    return "sway" if is_speaker else "idle"
+    return "idle"
 
 
 def motion_offset(style: str, intensity: float, t: float, duration: float,
@@ -126,7 +150,7 @@ def estimate_mouth_region(char_img: Image.Image):
     Assumes a roughly-centered, camera-facing figure: the head occupies the
     top ~1/3 of the visible cutout and the mouth sits in the lower half of
     that head band, horizontally centred. This is intentionally coarse -- if it
-    misses (profile / helmet / non-human) `apply_jaw_drop` is a harmless no-op
+    misses (profile / helmet / non-human) `apply_mouth_open` is a harmless no-op
     and the body motion + audio still render.
     """
     bbox = char_img.getchannel("A").getbbox()
@@ -147,14 +171,17 @@ def estimate_mouth_region(char_img: Image.Image):
     return (round(mx0), round(my0), round(mx1), round(my1))
 
 
-def apply_jaw_drop(char_img: Image.Image, mouth_rect, openness: float) -> None:
-    """Open the mouth by translating the lower half of the mouth region down.
+def apply_mouth_open(char_img: Image.Image, mouth_rect, openness: float) -> None:
+    """Animate the MOUTH (lips parting), not the jaw translating down.
 
-    Ported from the sidecar ``_apply_mouth_shape`` (v3): the lower half of the
-    crop TRANSLATES down proportional to ``openness`` and a soft dark gap is
-    revealed where it used to sit -- the same unambiguous "jaw drops, a dark gap
-    appears" cue a hand-drawn mouth-open frame uses. Mutates ``char_img`` in
-    place.
+    Owner-reported regression (2026-08-26): "mouth movement is happening on the
+    jaw not the mouth." The previous approach physically translated the lower
+    mouth strip downward (a jaw-drop cue), which read as the jaw moving. This
+    version instead draws a real open-**mouth** shape (a dark, horizontally-wide
+    ellipse centred on the mouth's midline, whose height and darkness scale with
+    `openness`) — a closed mouth at 0, a clear open mouth at 1. It stays inside
+    the head/mouth band, so only the mouth changes. Mutates ``char_img`` in
+    place and is a harmless no-op if the mouth rect is degenerate.
     """
     mx0, my0, mx1, my1 = mouth_rect
     if mx1 <= mx0 or my1 <= my0:
@@ -162,23 +189,42 @@ def apply_jaw_drop(char_img: Image.Image, mouth_rect, openness: float) -> None:
     openness = max(0.0, min(1.0, float(openness)))
     mw, mh = mx1 - mx0, my1 - my0
     mid_y = round((my0 + my1) / 2.0)
-    max_drop = mh * 0.85
-    drop = round(max_drop * openness)
+    # Opening height: a slim closed slit at 0, a clear open mouth at 1.
+    open_h = max(1, round(mh * (0.06 + 0.94 * openness)))
 
+    lip_h = max(1, round(mh * 0.30))   # soft lip frame around the opening
+    canvas_w = mw + 4
+    canvas_h = open_h + 2 * lip_h
+
+    patch = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(patch)
+
+    # Lips: a slightly larger rounded outline in a dark tone.
+    lip_alpha = round(150 * openness)
+    d.ellipse([1, 0, canvas_w - 2, canvas_h - 1], outline=(80, 40, 40, lip_alpha), width=2)
+
+    # Interior open mouth (dark); height grows with openness.
+    inner_alpha = round(120 + 135 * openness)
+    d.ellipse(
+        [2, lip_h, canvas_w - 3, lip_h + open_h - 1],
+        fill=(15, 7, 7, inner_alpha),
+    )
+
+    # Centre the patch on the mouth band's vertical midline, horizontally on it.
+    paste_y = mid_y - open_h // 2 - lip_h
     overlay = Image.new("RGBA", char_img.size, (0, 0, 0, 0))
-    if drop >= 1:
-        gap_h = (mid_y - my0) + drop + round(mh * 0.15)
-        interior = Image.new("RGBA", (mw, max(1, gap_h)), (0, 0, 0, 0))
-        idraw = ImageDraw.Draw(interior)
-        idraw.ellipse(
-            [round(mw * 0.10), 0, round(mw * 0.90), gap_h],
-            fill=(25, 12, 12, round(190 * openness)),
-        )
-        overlay.paste(interior, (mx0, my0), interior)
-
-    lower_crop = char_img.crop((mx0, mid_y, mx1, my1))
-    overlay.paste(lower_crop, (mx0, mid_y + drop), lower_crop)
+    overlay.paste(patch, (mx0 - 2, paste_y), patch)
     char_img.alpha_composite(overlay)
+
+
+def apply_jaw_drop(char_img: Image.Image, mouth_rect, openness: float) -> None:
+    """Backward-compatible alias for :func:`apply_mouth_open`.
+
+    Kept so any external callers / older tests that referenced the original name
+    keep working; the rendered result is the new mouth-open (not a jaw
+    translation) — see :func:`apply_mouth_open`.
+    """
+    apply_mouth_open(char_img, mouth_rect, openness)
 
 
 def audio_openness_curve(audio_path: str, fps: int):
@@ -243,8 +289,14 @@ def render_beat_frames(bg_path, chars, width: int, height: int, fps: int,
             log.warning("animate: failed to load char %s: %s", c.get("name"), exc)
             continue
         target_h = max(20, int(float(c.get("scale", 0.5)) * height))
-        ratio = target_h / img.height
-        img = img.resize((max(1, int(img.width * ratio)), max(1, target_h)), Image.LANCZOS)
+        # Size the VISIBLE (opaque) character to `target_h`, not the padded
+        # cutout, and keep the feet anchored to the visible bottom so the size
+        # number matches the static composer exactly (see _place_character).
+        img, vbox = resize_cutout_to_visible_height(img, target_h)
+        # Horizontal centre + vertical bottom of the visible character, in the
+        # resized image's pixel space (used to centre/feet-anchor below).
+        v_center_x = (vbox[0] + vbox[2]) / 2.0
+        v_bottom_y = vbox[3]
         is_speaker = bool(c.get("is_speaker"))
         mouth = estimate_mouth_region(img)
         style = resolve_motion_style(c, is_speaker)
@@ -254,6 +306,7 @@ def render_beat_frames(bg_path, chars, width: int, height: int, fps: int,
             "img": img, "mouth": mouth, "is_speaker": is_speaker,
             "style": style, "intensity": intensity, "phase": phase,
             "x": float(c.get("x", 0.5)), "y": float(c.get("y", 0.92)),
+            "v_center_x": v_center_x, "v_bottom_y": v_bottom_y,
         })
 
     paths = []
@@ -265,16 +318,18 @@ def render_beat_frames(bg_path, chars, width: int, height: int, fps: int,
             work = p["img"].copy()
             if p["is_speaker"] and p["mouth"] and openness is not None:
                 opn = float(openness[min(f, len(openness) - 1)])
-                apply_jaw_drop(work, p["mouth"], opn)
+                apply_mouth_open(work, p["mouth"], opn)
             tx, ty, angle = motion_offset(
                 p["style"], p["intensity"], t, duration, p["phase"], width, height,
             )
             if angle:
                 work = work.rotate(float(angle), resample=Image.BICUBIC, expand=True)
-            # Feet-anchor placement, same convention as _place_character /
-            # the editor (y is a top-anchor for the feet line).
-            px = int(width * p["x"] - work.width / 2.0 + tx)
-            py = int(height * p["y"] - work.height + ty)
+            # Feet-anchor placement, same convention as _place_character / the
+            # editor (y is a top-anchor for the feet line). We centre on the
+            # VISIBLE character's horizontal centre and pin the visible bottom
+            # to `y` — not the transparent padding.
+            px = int(width * p["x"] - p["v_center_x"] + tx)
+            py = int(height * p["y"] - p["v_bottom_y"] + ty)
             px = max(-work.width, min(width, px))
             py = max(-work.height, min(height, py))
             ov.alpha_composite(work, (px, py))

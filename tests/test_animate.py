@@ -23,7 +23,7 @@ from PIL import Image  # noqa: E402
 
 from renderer.animate import (  # noqa: E402
     estimate_mouth_region,
-    apply_jaw_drop,
+    apply_mouth_open,
     motion_offset,
     resolve_motion_style,
     render_beat_frames,
@@ -46,14 +46,24 @@ def _bbox(img):
 
 
 def test_style_mapping():
-    assert resolve_motion_style({"action": "speaking"}, True) == "sway"
+    # 2026-08-26: plain "speaking" must NOT bounce/sway the whole body — only
+    # the mouth moves (owner: "the speaker keeps bouncing ... that should be an
+    # added action, it shouldn't just happen"). So speech family -> idle body.
+    assert resolve_motion_style({"action": "speaking"}, True) == "idle"
+    assert resolve_motion_style({"action": "talking"}, True) == "idle"
     assert resolve_motion_style({"action": "nodding"}, True) == "nod"
     assert resolve_motion_style({"action": "walking"}, False) == "walk_in_place"
+    assert resolve_motion_style({"action": "bouncing"}, True) == "bounce"
     assert resolve_motion_style({"motion_style": "bounce"}, True) == "bounce"
-    # Unknown action -> speaker sway / bystander idle (never errors).
-    assert resolve_motion_style({"action": "totally unknown"}, True) == "sway"
+    assert resolve_motion_style({"motion_style": "bounce"}, False) == "bounce"
+    # Unknown action -> idle for BOTH roles (body motion is opt-in).
+    assert resolve_motion_style({"action": "totally unknown"}, True) == "idle"
     assert resolve_motion_style({"action": "totally unknown"}, False) == "idle"
+    assert resolve_motion_style({}, True) == "idle"
     assert resolve_motion_style({}, False) == "idle"
+    # Explicit gesture actions still move the body (opt-in, not automatic).
+    assert resolve_motion_style({"action": "pointing"}, True) == "sway"
+    assert resolve_motion_style({"action": "wave"}, True) == "sway"
     print("test_style_mapping OK")
 
 
@@ -78,11 +88,11 @@ def test_mouth_region_and_jaw():
     assert rect is not None, "no mouth rect from a plain head image"
     mx0, my0, mx1, my1 = rect
     assert mx1 > mx0 and my1 > my0
-    # jaw-drop must change pixels when openness goes up.
+    # mouth-open must change pixels when openness goes up (mouth opens at 1.0).
     closed = img.copy()
     open_ = img.copy()
-    apply_jaw_drop(closed, rect, 0.0)
-    apply_jaw_drop(open_, rect, 1.0)
+    apply_mouth_open(closed, rect, 0.0)
+    apply_mouth_open(open_, rect, 1.0)
     # Count differing pixels within an extended mouth band.
     band = (max(0, mx0 - 10), max(0, my0 - 10), mx1 + 10, min(img.height, my1 + 30))
     c_crop = closed.crop(band).convert("RGB")
@@ -93,8 +103,24 @@ def test_mouth_region_and_jaw():
     for a, b in zip(cpix, opix):
         if a != b:
             diff += 1
-    assert diff > 0, "jaw-drop at openness=1.0 produced zero pixel change (mouth not opening)"
-    print(f"test_mouth_region_and_jaw OK (mouth rect {rect}, {diff} px changed)")
+    assert diff > 0, "mouth-open at openness=1.0 produced zero pixel change (mouth not opening)"
+    # The change must be CENTERED on the mouth band (i.e. on the MOUTH), not
+    # shifting the whole head/jaw: the head's outer silhouette must not move.
+    # _head_image is a full rectangle, so simply assert pixels outside a wide
+    # margin around the mouth band are identical between open/closed.
+    outside = (0, 0, img.width, my0 - 25)
+    oc = closed.crop(outside).convert("RGB").getdata()
+    oo = open_.crop(outside).convert("RGB").getdata()
+    assert all(a == b for a, b in zip(oc, oo)), \
+        "head pixels outside the mouth band changed — the 'jaw' moved, not the mouth"
+    # The backward-compatible alias must behave identically.
+    alias = img.copy()
+    apply_jaw_drop_alias = __import__("renderer.animate", fromlist=["apply_jaw_drop"]).apply_jaw_drop
+    apply_jaw_drop_alias(alias, rect, 1.0)
+    al_px = list(alias.crop(band).convert("RGB").getdata())
+    op_px = list(open_.crop(band).convert("RGB").getdata())
+    assert al_px == op_px, "apply_jaw_drop alias differs from apply_mouth_open"
+    print(f"test_mouth_region_and_jaw OK (mouth rect {rect}, {diff} px changed in band)")
 
 
 def test_render_beat_frames(tmp="/tmp/animate_test"):

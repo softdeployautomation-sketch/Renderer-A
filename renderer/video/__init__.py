@@ -123,6 +123,43 @@ def _load_font(size: int):
     return ImageFont.load_default()
 
 
+def visible_bbox(img: Image.Image) -> tuple[int, int, int, int]:
+    """Return the opaque (alpha) bounding box of a character cutout.
+
+    If the cutout has NO transparent pixels (fully opaque) it returns the whole
+    image bounds. The painted character is what `scale` should really measure —
+    a cutout can carry a lot of transparent padding (the person only fills part
+    of the PNG), so sizing off the full image makes a character render smaller
+    than its scale number. Every place we resize/place a character goes through
+    this so `scale` is a true fraction of the ON-SCREEN body height, not of the
+    padded cutout.
+    """
+    bb = img.getchannel("A").getbbox()
+    if not bb:
+        return (0, 0, img.width, img.height)
+    return bb
+
+
+def resize_cutout_to_visible_height(
+    img: Image.Image, target_visible_px: int
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    """Resize a cutout so its VISIBLE (opaque) height equals `target_visible_px`.
+
+    Returns (resized_img, visible_bbox_in_resized_space). Because the whole
+    image is scaled by the same ratio, the character's proportional placement
+    inside the frame is preserved — we just agree that `scale` names the visible
+    person's height, not the transparent padding's.
+    """
+    l, t, r, b = visible_bbox(img)
+    vis_h = max(1, b - t)
+    ratio = target_visible_px / vis_h
+    rw = max(1, int(img.width * ratio))
+    rh = max(1, int(img.height * ratio))
+    resized = img.resize((rw, rh), Image.LANCZOS)
+    vbox = (round(l * ratio), round(t * ratio), round(r * ratio), round(b * ratio))
+    return resized, vbox
+
+
 def _place_character(
     bg: Image.Image,
     char_img: Image.Image,
@@ -133,37 +170,37 @@ def _place_character(
     """Composite `char_img` (RGBA, transparent bg) onto `bg`.
 
     FIX (2026-08-25): x/y now use the SAME convention as the editors
-    (classic dashboard.html + new video-tab.html placement canvas).
+    (classic dashboard.html + new video-tab.html placement editor).
     In the editor each character is drawn with CSS
     `left:{x*100}%; top:{y*100}%; transform:translate(-50%,-100%)`, so:
       - x is the horizontal CENTER of the character (0..1 fraction of width), and
       - y is the top-anchor of where the character's FEET sit (0..1 fraction of
         height DOWN from the top; y=0.92 => near the bottom of the frame).
-    Previously this renderer treated y as a bottom-UP anchor (`h*(1-y)`) which
+    Previously this renderer treated y as a bottom-UP fraction (`h*(1-y)`) which
     mirrored the character vertically (y=0.92 rendered near the TOP) — the root
     cause of "dragged position not persisting in the video" since both editors
     send top-anchor values.
+
+    Size (2026-08-26): `target_h` is now a fraction of the VISIBLE (opaque)
+    body height, not the full cutout — a character already cut with transparent
+    margins now renders at the same on-screen size as a tightly-cropped one for
+    the same `scale` (and no longer "very small" at a high size number).
     """
     w, h = bg.size
-    # Character height is a fraction of the canvas driven by `scale`.
     target_h = max(20, int(scale * h))
-    ratio = target_h / char_img.height
-    cw = max(1, int(char_img.width * ratio))
-    ch = max(1, target_h)
-    resized = char_img.resize((cw, ch), Image.LANCZOS)
-
     cx = max(0.0, min(1.0, float(x)))
     cy = max(0.0, min(1.0, float(y)))
 
-    # Center the character horizontally on the `x` fraction (matches editor
-    # translate(-50%)). Clamp so it always stays inside the frame.
-    px = int(w * cx - cw / 2.0)
-    px = max(0, min(w - cw, px))
+    resized, vbox = resize_cutout_to_visible_height(char_img, target_h)
+    # Centre on the VISIBLE character's horizontal centre; feet = visible bottom.
+    v_center_x = (vbox[0] + vbox[2]) / 2.0
+    v_bottom_y = vbox[3]
 
-    # Feet anchored at the `y` fraction measured DOWN from the top (matches
-    # editor translate(-100%): the box's bottom edge sits at y*100% from top).
+    px = int(w * cx - v_center_x)
+    px = max(0, min(w - resized.width, px))
+
     feet_y = int(h * cy)
-    py = max(0, min(h - ch, feet_y - ch))
+    py = max(0, min(h - resized.height, feet_y - v_bottom_y))
 
     bg.alpha_composite(resized, (px, py))
 

@@ -114,6 +114,43 @@ def main():
         "cache hit returned the character's FIRST-scene placement, not the current scene's"
     assert first["x"] == 0.1, "first (cache-miss) placement should keep its own values"
 
+    # ── 2026-08-26 size regression: `scale` must reflect the VISIBLE body ────
+    # A cutout that carries transparent padding must render the character at the
+    # same on-screen height as a tightly-cropped one for the SAME scale, and the
+    # feet must anchor on the VISIBLE bottom. Before this fix the renderer sized
+    # off the full (padded) image, so a character looked smaller than its size
+    # number ("size 90 renders very small").
+    def _padded_cutout(inner=(0, 30, 20, 40)):
+        """40x40 cutout whose opaque character is ONLY the rect `inner`."""
+        im = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+        l, t, r, b = inner
+        px = im.load()
+        for yy in range(t, b):
+            for xx in range(l, r):
+                px[xx, yy] = (255, 0, 0, 255)
+        return im
+
+    padded = _padded_cutout()          # visible char height = 10px (t..b)
+    tight = Image.new("RGBA", (10, 10), (255, 0, 0, 255))  # visible 10px
+    bg_p = Image.new("RGBA", (100, 100), (0, 0, 0, 255))
+    bgt = Image.new("RGBA", (100, 100), (0, 0, 0, 255))
+    TARGET_SCALE = 0.2   # target visible height = 20px on the 100px bg
+    _place_character(bg_p, padded, 0.5, 0.5, TARGET_SCALE)
+    _place_character(bgt, tight, 0.5, 0.5, TARGET_SCALE)
+    # Visible (opaque) height is identical regardless of padding — THE fix.
+    vh_p = _bbox(bg_p)[3] - _bbox(bg_p)[2]
+    vh_t = _bbox(bgt)[3] - _bbox(bgt)[2]
+    print(f"padded visible height={vh_p}px, tight visible height={vh_t}px (both ~20)")
+    assert abs(vh_p - 20) <= 4, f"padded cutout visible height={vh_p}, expected ~20"
+    assert abs(vh_t - 20) <= 4, f"tight cutout visible height={vh_t}, expected ~20"
+    assert abs(vh_p - vh_t) <= 2, "padding changed the character's on-screen size"
+    # Feet (opaque bottom) anchored at y=0.5 -> ~50 for the tight char; the
+    # padded char must also render fully inside the frame (bottom stays <= h).
+    for name, b in (("tight", bgt), ("padded", bg_p)):
+        bottom = _bbox(b)[3]
+        print(f"{name} feet bottom={bottom} (frame height=100)")
+        assert 0 < bottom <= 100, f"{name} feet bottom={bottom} outside frame"
+
     print("ALL PLACEMENT TESTS PASS")
 
 
