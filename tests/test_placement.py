@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
 
-from renderer.video import _place_character
+from renderer.video import _place_character, _letterbox_bg
 
 # Stub out the heavy runtime deps that renderer/render.py pulls in transitively
 # (cloud->boto3, ffmpeg, music, voice, assets, background_removal, config) so this
@@ -150,6 +150,30 @@ def main():
         bottom = _bbox(b)[3]
         print(f"{name} feet bottom={bottom} (frame height=100)")
         assert 0 < bottom <= 100, f"{name} feet bottom={bottom} outside frame"
+
+    # ── 2026-08-26 background regression: square AI art must COVER a 16:9 frame ─
+    # Owner: "the background fit the landscape but the video cut out the left
+    # and right leaving blank in both, looked like it reduced the background."
+    # Old _letterbox_bg LETTERBOXED (contain): a 1:1 square bg in a 16:9 frame →
+    # dark bars on both sides. It now cover-crops so the bg fills the whole frame.
+    sq = Image.new("RGB", (100, 100), (200, 30, 30))          # square red bg
+    # Rebuild _letterbox_bg result via its own cover path using a temp file.
+    import tempfile, os as _os
+    _tmpbg = _os.path.join(tempfile.gettempdir(), "bg_cover_test.png")
+    sq.save(_tmpbg)
+    covered = _letterbox_bg(_tmpbg, 100, 56)
+    px = covered.convert("RGB")
+    print(f"bg corners: TL={px.getpixel((2,2))} TR={px.getpixel((97,2))} "
+          f"BL={px.getpixel((2,53))} BR={px.getpixel((97,53))}")
+    for corner in ((2, 2), (97, 2), (2, 53), (97, 53)):
+        r, g, b = px.getpixel(corner)
+        assert (r, g, b) == (200, 30, 30), \
+            f"background corner {corner} is dark/letterboxed, got {(r,g,b)}"
+    try:
+        _os.remove(_tmpbg)
+    except OSError:
+        pass
+    print("test_background_cover OK (square bg fully covers 16:9 frame, no bars)")
 
     print("ALL PLACEMENT TESTS PASS")
 

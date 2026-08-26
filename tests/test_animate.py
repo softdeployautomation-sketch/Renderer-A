@@ -150,10 +150,53 @@ def test_render_beat_frames(tmp="/tmp/animate_test"):
     print("test_render_beat_frames OK (12 frames at 1.2s@10fps)")
 
 
+def test_mouth_not_on_eyes():
+    """The mouth rect must land on the MOUTH (lower head), not the EYES.
+
+    Regression guard for the owner report "the mouth movement moved to the eyes":
+    a fixed head=top-32% heuristic put the mouth at ~22% of height, which for a
+    taller/close-up figure is the forehead/eye line. We build a humanoid
+    silhouette (wide skull at top -> narrow neck -> wide shoulders/body), like a
+    real cutout, and assert estimate_mouth_region's center sits in the LOWER
+    part of the detected head (below the head-middle), i.e. on the mouth not the
+    eyes, and clearly below the first ~8% (eye strip).
+    """
+    # Build a 140x200 humanoid alpha silhouette:
+    #   rows   0..34  skull/head   (width 90)
+    #   rows  34..48  neck         (width 26)  -> detected head pinch
+    #   rows  48..200 shoulders/body (width 150)
+    img = Image.new("RGBA", (300, 200), (0, 0, 0, 0))
+    px = img.load()
+    for yy in range(0, 200):
+        wline = 90 if yy < 34 else (42 if yy < 48 else 150)
+        x0 = (300 - wline) // 2
+        for xx in range(x0, x0 + wline):
+            px[xx, yy] = (200, 120, 80, 255)
+
+    rect = estimate_mouth_region(img)
+    assert rect is not None, "no mouth rect from a humanoid silhouette"
+    mx0, my0, mx1, my1 = rect
+    cy = (my0 + my1) / 2.0
+    head_top = 0
+    head_h = 34                       # the neck pinch detected → head is 0..34
+    print(f"mouth rect={rect} center_y={cy:.1f} (head height={head_h})")
+    # Mouth must be BELOW the head's vertical middle (i.e. lower face) and plainly
+    # below the eye strip (top ~8% of the figure) — the "moved to the eyes" bug.
+    assert cy > head_top + head_h * 0.5, \
+        f"mouth center {cy:.1f} is in the UPPER head (eyes), expected lower face"
+    assert cy > head_top + head_h * 0.60, \
+        f"mouth center {cy:.1f} is too high (eye/forehead zone)"
+    assert cy < head_top + head_h * 0.90, \
+        f"mouth center {cy:.1f} is below the chin (dropped onto the neck)"
+    assert cy > 200 * 0.08, "mouth sits in the top 8% strip (the eye line)"
+    print("test_mouth_not_on_eyes OK (mouth in lower head, not on the eyes)")
+
+
 def main():
     test_style_mapping()
     test_motion_offset()
     test_mouth_region_and_jaw()
+    test_mouth_not_on_eyes()
     test_render_beat_frames()
     print("ALL ANIMATE TESTS PASS")
 

@@ -36,6 +36,8 @@ import math
 import os
 import subprocess
 
+import numpy as np
+
 from PIL import Image, ImageDraw
 
 # Reuse the same letterbox helper as the static composer so an animated scene
@@ -144,31 +146,62 @@ def motion_offset(style: str, intensity: float, t: float, duration: float,
     return tx, ty, angle
 
 def estimate_mouth_region(char_img: Image.Image):
-    """Heuristic mouth rect from the cutout's alpha bbox (no face detector).
+    """Adaptive mouth rect from the cutout's alpha silhouette (no face detector).
+
+    Owner-reported regression (2026-08-26): \"the mouth movement moved to the
+    eyes.\" The old fixed-fraction heuristic assumed the head is the top ~1/3 of
+    the figure and put the mouth at ~22% of height — for a Waist/Portrait cast
+    image (head filling most of the frame) that lands on the forehead/EYES. This
+    version estimates the HEAD from the alpha **width profile** (the skull is the
+    top wide band; the neck is the first narrow valley below it), then places the
+    mouth in the LOWER third of that head (well below the eye line) and sizes it
+    to the head/face — adapting to full-body vs waist-up vs close-up framing.
 
     Returns (mx0, my0, mx1, my1) in the cutout's own pixel space, or None.
-    Assumes a roughly-centered, camera-facing figure: the head occupies the
-    top ~1/3 of the visible cutout and the mouth sits in the lower half of
-    that head band, horizontally centred. This is intentionally coarse -- if it
-    misses (profile / helmet / non-human) `apply_mouth_open` is a harmless no-op
-    and the body motion + audio still render.
+    Coarse on purpose: if it misses (profile / helmet / non-human) `apply_mouth_open`
+    is a harmless no-op and the body motion + audio still render.
     """
     bbox = char_img.getchannel("A").getbbox()
     if not bbox:
         return None
     left, top, right, bottom = bbox
     bw, bh = right - left, bottom - top
-    if bh <= 12:
+    if bh <= 24 or bw <= 12:
         return None
-    # Head = top ~32% of the visible figure.
-    head_bottom = top + bh * 0.32
-    mx0 = left + bw * 0.30
-    mx1 = left + bw * 0.70
-    my0 = top + bh * 0.16          # below the eyes
-    my1 = head_bottom * 0.86       # just under the mouth -> upper lip zone
+
+    alpha = np.asarray(char_img.getchannel("A"), dtype=np.uint8)
+    band = alpha[top:bottom, left:right] > 90
+    row_w = band.sum(axis=1)  # opaque pixel count per row (the width profile)
+
+    first = int(np.argmax(row_w > 0)) if np.any(row_w > 0) else 0
+    # The skull (top of the head) is the widest band right at the top; the neck
+    # is the first narrower band just below it. Key nominal per-row pixel counts,
+    # but rather than hardcode a pixel value we derive both from the silhouette.
+    skull_span = max(2, int(bh * 0.06))
+    skull = row_w[first:first + skull_span]
+    head_ref = float(skull.max()) if skull.size else 0.0
+    head_h = bh * 0.22                      # fallback if no neck pinch found
+    if head_ref > 0:
+        neck_rows = np.flatnonzero(row_w[first + 2:] < head_ref * 0.68)
+        if neck_rows.size:
+            neck = first + 2 + int(neck_rows[0])
+            if neck - first >= 8:
+                head_h = neck - first
+    head_h = max(8.0, min(float(head_h), bh * 0.80))
+
+    # Mouth sits ~70% down the head; band height ~a fifth of the head; width ~ a
+    # third of the face width — clearly BELOW the eyes either way.
+    mouth_cy = top + head_h * 0.70
+    mouth_half = max(2.0, head_h * 0.10)
+    mouth_w = max(6.0, bw * 0.34)
+    cx = left + bw * 0.5
+    my0 = int(round(mouth_cy - mouth_half))
+    my1 = int(round(mouth_cy + mouth_half))
+    mx0 = int(round(cx - mouth_w / 2.0))
+    mx1 = int(round(cx + mouth_w / 2.0))
     if mx1 <= mx0 or my1 <= my0:
         return None
-    return (round(mx0), round(my0), round(mx1), round(my1))
+    return (mx0, my0, mx1, my1)
 
 
 def apply_mouth_open(char_img: Image.Image, mouth_rect, openness: float) -> None:

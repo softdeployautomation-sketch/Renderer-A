@@ -21,14 +21,32 @@ def _load(path: str) -> Image.Image:
 
 
 def _letterbox_bg(path: str | None, w: int, h: int, color=(8, 8, 14, 255)) -> Image.Image:
+    """Cover-crop a background image onto the w×h frame (object-fit: cover).
+
+    2026-08-26 (owner-regression fix): this used to LETTERBOX (contain) — scale
+    to FIT then centre, leaving dark bars on the short dimension. For a square
+    AI-generated background in a 16:9 scene that produced blank bars on BOTH
+    left/right and shoved characters into dark gutters (\"it cut out the left
+    and right leaving blank in both\"). The old sidecar engine used
+    ``_fit_background_cover``; this now matches it: scale to COVER (so the
+    smallest frame edge only just fills), then center-crop. No bars, no
+    'reduced' background — the artwork fills the whole frame at all times.
+    """
     bg = Image.new("RGBA", (w, h), color)
     if not path:
         return bg
     img = _load(path)
-    img.thumbnail((w, h), Image.LANCZOS)
-    x = (w - img.width) // 2
-    y = (h - img.height) // 2
-    bg.alpha_composite(img, (x, y))
+    iw, ih = img.size
+    if iw <= 0 or ih <= 0:
+        return bg
+    scale = max(w / iw, h / ih)
+    nw = max(1, round(iw * scale))
+    nh = max(1, round(ih * scale))
+    img = img.resize((nw, nh), Image.LANCZOS)
+    left = (nw - w) // 2
+    top = (nh - h) // 2
+    img = img.crop((left, top, left + w, top + h))
+    bg.alpha_composite(img.convert("RGBA"), (0, 0))
     return bg
 
 
