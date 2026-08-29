@@ -29,7 +29,25 @@ jobs:
     name: Render character videos
     runs-on: ubuntu-latest
     timeout-minutes: 120     # never let an ephemeral runner be abused
-    concurrency: 1            # one runner at a time per repo
+    # FIX (2026-08-29): `concurrency: 1` is not valid GitHub Actions syntax
+    # (the key needs a `group`, optionally with `cancel-in-progress`) — GitHub
+    # was silently coercing it in a way that CANCELLED the in-progress run
+    # every time a new one was created, instead of queuing behind it as the
+    # "one runner at a time" comment intended. Confirmed live: the Worker's
+    # */2min cron re-dispatches whenever a job is still 'queued', and a
+    # cancelled run never gets far enough to actually claim the job — so it
+    # stayed 'queued' and got re-dispatched again next tick. Observed 11
+    # dispatch->cancel cycles in a row (runs #117-#128, 2026-08-29 07:58-
+    # 08:20 UTC) before one finally raced ahead of the next dispatch and
+    # completed — almost half an hour where no render could finish. This is
+    # the real cause behind "it's been bad since I tested", separate from
+    # (and on top of) the animation/placement fixes in c7b081b, which are
+    # correct but never got a clean, uninterrupted run to prove it during
+    # that window. cancel-in-progress: false makes a new dispatch WAIT for
+    # the current run instead of killing it — true single-runner-at-a-time.
+    concurrency:
+      group: renderer-a-render
+      cancel-in-progress: false
 
     steps:
       - name: Checkout renderer
