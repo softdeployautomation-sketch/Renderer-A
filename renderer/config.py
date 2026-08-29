@@ -49,9 +49,26 @@ POLL_SECONDS = float(os.environ.get("CHANNELRY_RENDER_POLL_SECONDS", "3"))
 # Max length of a video in seconds (safety, not a hard product limit).
 MAX_VIDEO_SECONDS = float(os.environ.get("CHANNELRY_RENDER_MAX_SECONDS", "600"))
 
-# Default output canvas. Scene backgrounds are letterbox-padded to this.
+# Default output canvas (16:9). Scene backgrounds are cover-cropped to this.
 OUTPUT_WIDTH = int(os.environ.get("CHANNELRY_OUTPUT_WIDTH", "1280"))
 OUTPUT_HEIGHT = int(os.environ.get("CHANNELRY_OUTPUT_HEIGHT", "720"))
+
+# Per-job aspect ratio (2026-08-29, owner request: an aspect-ratio picker
+# ahead of script entry in the editor). Worker-full.ts validates and stores
+# `aspect_ratio` on the job's settings as one of these three keys; anything
+# else (missing, old jobs queued before this, an unknown value) falls back
+# to the existing 16:9 default above — same behavior as before this feature.
+ASPECT_RATIO_DIMS: dict[str, tuple[int, int]] = {
+    "16:9": (OUTPUT_WIDTH, OUTPUT_HEIGHT),
+    "9:16": (OUTPUT_HEIGHT, OUTPUT_WIDTH),
+    "1:1": (1024, 1024),
+}
+
+
+def resolve_output_dims(settings: dict) -> tuple[int, int]:
+    """Job's requested (width, height), falling back to the 16:9 default."""
+    ratio = str((settings or {}).get("aspect_ratio") or "").strip()
+    return ASPECT_RATIO_DIMS.get(ratio, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
 
 # When rembg is not installed (e.g. a quick local smoke test) the pipeline
 # falls back to using the raw character image. Set to "1" to force that path.

@@ -258,7 +258,8 @@ def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
     character_cache: dict = {}
     clips: list[str] = []
     snapshot: list[dict] = []
-    w, h = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
+    # 2026-08-29: per-job aspect ratio (was always the hardcoded 16:9 default).
+    w, h = config.resolve_output_dims(settings)
 
     for idx, beat in enumerate(beats):
         # Title-card first (2026-08-25): a beat flagged is_title_card has no
