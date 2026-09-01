@@ -167,6 +167,15 @@ def resize_cutout_to_visible_height(
     image is scaled by the same ratio, the character's proportional placement
     inside the frame is preserved — we just agree that `scale` names the visible
     person's height, not the transparent padding's.
+
+    FIX (2026-08-31): vbox is now the ACTUAL alpha bbox measured on the
+    resized image, not the pre-resize bbox coordinates projected by `ratio`.
+    Confirmed live: LANCZOS resampling bleeds alpha beyond that theoretical
+    projection on any real upscale (a hard-edged 10px-tall test rect upscaled
+    2.8x measured 35px of real opaque height against a projected 28px) — a
+    silent few-pixel drift on every character, worse the more a cutout gets
+    scaled up. Measuring the real result instead of projecting from the
+    source is exact regardless of resampling behavior.
     """
     l, t, r, b = visible_bbox(img)
     vis_h = max(1, b - t)
@@ -174,7 +183,7 @@ def resize_cutout_to_visible_height(
     rw = max(1, int(img.width * ratio))
     rh = max(1, int(img.height * ratio))
     resized = img.resize((rw, rh), Image.LANCZOS)
-    vbox = (round(l * ratio), round(t * ratio), round(r * ratio), round(b * ratio))
+    vbox = visible_bbox(resized)
     return resized, vbox
 
 
@@ -205,7 +214,14 @@ def _place_character(
     the same `scale` (and no longer "very small" at a high size number).
     """
     w, h = bg.size
-    target_h = max(20, int(scale * h))
+    # FIX-12 (2026-08-31, owner-reported: "at 90 it's small... should start
+    # at 50 with that size"). A straight scale*h mapping made even a 90%
+    # slider read as modest on screen. Boosted 1.4x (capped at the full
+    # frame) so a lower slider number still looks properly sized and 90%
+    # reads as noticeably larger than before — matches the SAME boost the
+    # editor's own placement preview applies (video-tab.html's
+    # _visualScale), so what's previewed is what renders.
+    target_h = max(20, int(min(1.0, scale * 1.4) * h))
     cx = max(0.0, min(1.0, float(x)))
     cy = max(0.0, min(1.0, float(y)))
 

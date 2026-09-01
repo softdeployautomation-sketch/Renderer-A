@@ -321,7 +321,10 @@ def render_beat_frames(bg_path, chars, width: int, height: int, fps: int,
         except Exception as exc:                        # noqa: BLE001
             log.warning("animate: failed to load char %s: %s", c.get("name"), exc)
             continue
-        target_h = max(20, int(float(c.get("scale", 0.5)) * height))
+        # FIX-12 (2026-08-31): same 1.4x visual-size boost as the static
+        # composer (_place_character) — keep these two in sync, see its
+        # comment for the full reasoning.
+        target_h = max(20, int(min(1.0, float(c.get("scale", 0.5)) * 1.4) * height))
         # Size the VISIBLE (opaque) character to `target_h`, not the padded
         # cutout, and keep the feet anchored to the visible bottom so the size
         # number matches the static composer exactly (see _place_character).
