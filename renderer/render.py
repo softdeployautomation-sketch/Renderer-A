@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import assets, background_removal, cloud, config, ffmpeg, sadtalker, voice
+from . import assets, background_removal, cloud, config, ffmpeg, sadtalker, text_to_video, voice
 from .video import compose_scene
 
 log = logging.getLogger("render.pipeline")
@@ -275,4 +275,21 @@ def render_sadtalker(job_id: str, job: dict) -> tuple[str, list]:
             "line": str(settings.get("dialogue") or "").strip(),
         }
     ]
+
+
+def render_text_to_video(job_id: str, job: dict) -> tuple[str, list]:
+    """Render a narrated text-to-video from a script string.
+
+    Dispatched when settings.method == "text_to_video". Delegates to
+    text_to_video.render_text_to_video() which handles TTS, background
+    generation, Ken Burns + captions, and ffmpeg concat.
+
+    Returns (final_video_url, scene_snapshot). Raises RenderJobError on
+    job-level failure (missing script, TTS failure, encode failure).
+    """
+    settings = parse_settings(job)
+    script = str(settings.get("script") or "").strip()
+    if not script:
+        raise RenderJobError("text_to_video job has no script to narrate")
+    return text_to_video.render_text_to_video(job_id, job)
     return url, snapshot
