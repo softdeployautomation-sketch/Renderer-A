@@ -6,15 +6,41 @@
 FROM python:3.11-slim
 
 # ffmpeg + ffprobe (required for scene encode + concat)
+# git (clone SadTalker repo), curl (download checkpoints),
+# libsm6/libxext6 (opencv headless GUI libs SadTalker/opencv import).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
- && rm -rf /var/lib/apt/lists/*
+    git \
+    curl \
+    libsm6 \
+    libxext6 \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Dependencies first so code edits don't invalidate the model/package cache.
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# ── SadTalker (talking-head from photo + audio) ──────────────────────────
+# Provisioned once at image build time so each render job starts fast.
+# torch CPU wheel (no GPU on GitHub free runners) + SadTalker python deps.
+RUN pip install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cpu \
+    opencv-python \
+    scipy \
+    tqdm \
+    safetensors \
+    facexlib
+
+# Clone the SadTalker repo + download the checkpoints needed for the
+# safetensor code path with preprocess='crop' (see renderer/sadtalker.py).
+RUN git clone --depth 1 https://github.com/OpenTalker/SadTalker.git vendor/SadTalker \
+  && mkdir -p vendor/SadTalker/checkpoints \
+  && curl -fsSL -o vendor/SadTalker/checkpoints/SadTalker_V0.0.2_256.safetensors \
+     https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/SadTalker_V0.0.2_256.safetensors \
+  && curl -fsSL -o vendor/SadTalker/checkpoints/mapping_00229-model.pth.tar \
+     https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/mapping_00229-model.pth.tar
 
 COPY . .
 

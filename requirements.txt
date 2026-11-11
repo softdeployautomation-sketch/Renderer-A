@@ -12,3 +12,14 @@ edge-tts>=6.1
 # back to passthrough (no background removal) rather than failing.
 rembg>=2.0
 onnxruntime>=1.17
+
+# ── SadTalker (talking-head from photo + audio) ──────────────────────────
+# SadTalker is NOT in requirements.txt by design: it needs torch (CPU) plus
+# opencv/scipy/safetensors/facexlib, which are provisioned separately in the
+# Dockerfile / GitHub Actions CI so the base renderer stays light and imports
+# cleanly without torch (torch has no wheel for every Python version).
+# SadTalker is invoked as a subprocess (renderer/sadtalker.py), never imported
+# for its torch code path. Provisioned deps:
+#   torch (CPU), opencv-python, scipy, tqdm, safetensors, facexlib
+#   git (clone OpenTalker/SadTalker) + checkpoints downloaded at build time.
+# See Dockerfile and .github/workflows/render.yml.

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import animate, assets, background_removal, cloud, config, ffmpeg, music, voice
+from . import animate, assets, background_removal, cloud, config, ffmpeg, music, sadtalker, voice
 from .video import compose_scene, compose_title_card
 
 log = logging.getLogger("render.pipeline")
@@ -403,4 +403,54 @@ def render_character_video(job_id: str, job: dict) -> tuple[str, list]:
 
     # 7) upload to R2 -> public URL
     url = cloud.upload_video(job_id, final_path)
+    return url, snapshot
+
+
+def render_sadtalker(job_id: str, job: dict) -> tuple[str, list]:
+    """Render a talking-head video from a still photo + driven audio via SadTalker.
+
+    Opt-in per job: ``settings.method == "sadtalker"`` and ``USE_SADTALKER=1``.
+    Produces one clip (SadTalker bakes the driven audio into the video), then
+    normalizes/copies it to ``final.mp4`` and uploads to R2.
+
+    Returns (final_video_url, scene_snapshot). Raises RenderJobError on a
+    job-level failure (missing assets, SadTalker unavailable/unprovisioned,
+    inference failure).
+    """
+    settings = parse_settings(job)
+    ws = assets.make_workspace(job_id)
+
+    photo_url = str(settings.get("image_url") or "").strip()
+    audio_url = str(settings.get("audio_url") or "").strip()
+    if not photo_url:
+        raise RenderJobError("sadtalker job has no image_url (photo) to render")
+    if not audio_url:
+        raise RenderJobError("sadtalker job has no audio_url to drive lip sync")
+
+    # Download the still photo and the driving audio into the workspace.
+    photo_path = _download(photo_url, ws, "photo")
+    audio_path = _download(audio_url, ws, "audio")
+
+    # SadTalker produces the talking-head video (audio baked in).
+    w, h = config.resolve_output_dims(settings)
+    try:
+        talking_head_path = sadtalker.render(photo_path, audio_path, ws)
+    except sadtalker.SadTalkerError as exc:
+        raise RenderJobError(f"sadtalker render failed: {exc}") from exc
+
+    # Final assembly: normalize/single-clip copy into final.mp4.
+    # SadTalker output already carries the driven audio, so we just carry it
+    # through to a single H.264/AAC clip on the standard canvas.
+    final_path = str(ws / "final.mp4")
+    ffmpeg.concat_clips([talking_head_path], final_path, w, h)
+
+    url = cloud.upload_video(job_id, final_path)
+    snapshot = [
+        {
+            "index": 0,
+            "photo": photo_url,
+            "audio": audio_url,
+            "line": str(settings.get("dialogue") or "").strip(),
+        }
+    ]
     return url, snapshot

@@ -61,10 +61,26 @@ jobs:
       - name: Install ffmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg git curl
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
+
+      # ── SadTalker provisioning (CPU-only, GitHub free runner) ────────────
+      # torch CPU wheel + SadTalker python deps, then clone the repo and
+      # download the checkpoints needed for preprocess='crop' so each render
+      # job starts fast. ~300 MB download total, one-time per runner.
+      - name: Provision SadTalker (torch CPU + checkpoints)
+        run: |
+          pip install --quiet \
+            torch --index-url https://download.pytorch.org/whl/cpu \
+            opencv-python scipy tqdm safetensors facexlib
+          git clone --depth 1 https://github.com/OpenTalker/SadTalker.git vendor/SadTalker
+          mkdir -p vendor/SadTalker/checkpoints
+          curl -fsSL -o vendor/SadTalker/checkpoints/SadTalker_V0.0.2_256.safetensors \
+            https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/SadTalker_V0.0.2_256.safetensors
+          curl -fsSL -o vendor/SadTalker/checkpoints/mapping_00229-model.pth.tar \
+            https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/mapping_00229-model.pth.tar
 
       # Pre-warm the RemBG model so the FIRST claimed job doesn't spend the
       # first minutes downloading u2net while a job is already marked busy.
@@ -90,6 +106,10 @@ jobs:
           CHANNELRY_R2_ACCESS_KEY_ID: ${{ secrets.CHANNELRY_R2_ACCESS_KEY_ID }}
           CHANNELRY_R2_SECRET_ACCESS_KEY: ${{ secrets.CHANNELRY_R2_SECRET_ACCESS_KEY }}
           CHANNELRY_R2_PUBLIC_BASE_URL: ${{ secrets.CHANNELRY_R2_PUBLIC_BASE_URL }}
+          # Expose the sadtalker capability on this runner. Per-job opt-in via
+          # settings.method == "sadtalker" (renderer/worker.py).
+          USE_SADTALKER: "1"
+          CHANNELRY_SADTALKER_DIR: vendor/SadTalker
         run: |
           # Drain the queue FIFO (claim returns the OLDEST queued job first),
           # one after another until the queue is empty. max-jobs 1000 is

@@ -18,7 +18,9 @@ log = logging.getLogger("render.worker")
 
 # Methods this worker can render. Reported in the heartbeat meta so the queue
 # can later select a capable renderer (plan §25) without the frontend caring.
-SUPPORTED_METHODS = ("character_video", "still", "walk", "character_cutout")
+# "sadtalker" is only exercised when USE_SADTALKER=1 (provisioned on the
+# runner) and the job sets settings.method == "sadtalker" (per-job opt-in).
+SUPPORTED_METHODS = ("character_video", "still", "walk", "character_cutout", "sadtalker")
 
 
 def capabilities() -> dict:
@@ -55,6 +57,8 @@ def handle_job(job: dict) -> None:
             url, snapshot = render.render_character_video(job_id, job)
         elif method in ("still", "walk"):
             url, snapshot = render.render_single_character(job_id, job, method)
+        elif method == "sadtalker":
+            url, snapshot = render.render_sadtalker(job_id, job)
         else:
             cloud.report(
                 job_id, "failed", 100,
