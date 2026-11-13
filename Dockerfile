@@ -25,8 +25,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # ── SadTalker (talking-head from photo + audio) ──────────────────────────
 # Provisioned once at image build time so each render job starts fast.
 # torch CPU wheel (no GPU on GitHub free runners) + SadTalker python deps.
+# NOTE: torch is installed with its own --index-url so it doesn't shadow
+# PyPI for the other packages (opencv-python etc. are NOT on the PyTorch
+# index). Installing in one pip call with --index-url would break those.
 RUN pip install --no-cache-dir \
-    torch --index-url https://download.pytorch.org/whl/cpu \
+    torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir \
     opencv-python \
     scipy \
     tqdm \

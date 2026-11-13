@@ -1,4 +1,4 @@
-"""SadTalker talking-head render mode for channelry-render.
+"""SadTalker talking-head render mode for Renderer-A.
 
 CPU-only on GitHub free runners (~2 vCPU, 7 GB RAM, no GPU). Wraps
 OpenTalker/SadTalker ``inference.py`` as a subprocess:
@@ -28,7 +28,7 @@ CHANNELRY_SADTALKER_PREPROCESS
     ``crop`` (default).
 USE_SADTALKER
     Set to ``1`` to expose the sadtalker capability. Individual jobs opt in
-    via ``settings.method == "sadtalker"`` (per-job, see worker.py).
+    via ``settings.method == "sadtalker"`` (per-job opt-in; see worker.py).
 """
 
 from __future__ import annotations
@@ -62,40 +62,6 @@ _CHECKPOINTS: dict[str, str] = {
 DEFAULT_SIZE = 256
 DEFAULT_PREPROCESS = "crop"
 
-
-class SadTalkerError(RuntimeError):
-    """Raised when SadTalker cannot run or fails inference."""
-
-
-def _env(name: str, default: str) -> str:
-    return os.environ.get(name, default).strip()
-
-
-def sadtalker_dir() -> Path:
-    """Location of the cloned SadTalker repo (contains inference.py, src/)."""
-    return Path(_env("CHANNELRY_SADTALKER_DIR", "vendor/SadTalker")).expanduser()
-
-
-def checkpoint_dir() -> Path:
-    """Location of downloaded SadTalker checkpoints."""
-    return Path(
-        _env("CHANNELRY_SADTALKER_CHECKPOINT_DIR", str(sadtalker_dir() / "checkpoints"))
-    ).expanduser()
-
-
-def sadtalker_size() -> int:
-    try:
-        return int(_env("CHANNELRY_SADTALKER_SIZE", str(DEFAULT_SIZE)))
-    except ValueError:
-        return DEFAULT_SIZE
-
-
-def sadtalker_preprocess() -> str:
-    return _env("CHANNELRY_SADTALKER_PREPROCESS", DEFAULT_PREPROCESS)
-
-
-def use_sadtalker() -> bool:
-    return os.environ.get("USE_SADTALKER", "0").strip() == "1"
 
 
 def _download(url: str, dest: Path) -> None:
@@ -156,6 +122,13 @@ def ensure_sadtalker() -> tuple[Path, Path]:
     log.info("SadTalker ready (repo=%s, checkpoints=%s)", sdir, cdir)
     return sdir, cdir
 
+
+class SadTalkerError(RuntimeError):
+    """Raised when SadTalker cannot run or fails inference."""
+
+
+def _env(name: str, default: str) -> str:
+    return os.environ.get(name, default).strip()
 
 
 def _find_output_mp4(result_dir: Path, before: float) -> Optional[Path]:
@@ -234,3 +207,31 @@ def render(photo_path: str, audio_path: str, work_dir: Path) -> str:
 
     log.info("SadTalker output: %s (%d bytes)", out, out.stat().st_size)
     return str(out)
+
+
+
+def sadtalker_dir() -> Path:
+    """Location of the cloned SadTalker repo (contains inference.py, src/)."""
+    return Path(_env("CHANNELRY_SADTALKER_DIR", "vendor/SadTalker")).expanduser()
+
+
+def checkpoint_dir() -> Path:
+    """Location of downloaded SadTalker checkpoints."""
+    return Path(
+        _env("CHANNELRY_SADTALKER_CHECKPOINT_DIR", str(sadtalker_dir() / "checkpoints"))
+    ).expanduser()
+
+
+def sadtalker_size() -> int:
+    try:
+        return int(_env("CHANNELRY_SADTALKER_SIZE", str(DEFAULT_SIZE)))
+    except ValueError:
+        return DEFAULT_SIZE
+
+
+def sadtalker_preprocess() -> str:
+    return _env("CHANNELRY_SADTALKER_PREPROCESS", DEFAULT_PREPROCESS)
+
+
+def use_sadtalker() -> bool:
+    return os.environ.get("USE_SADTALKER", "0").strip() == "1"

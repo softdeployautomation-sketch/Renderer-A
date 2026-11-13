@@ -1,11 +1,13 @@
-# channelry-render
+# Renderer-A — Channelry video render worker
 
-Standalone render worker for **Channelry** faceless videos. It polls the
-Cloudflare queue through the existing `render-workers` API, downloads the
-per-beat assets the job carries, chops character backgrounds out with RemBG,
-composes each scene (background + positioned characters), synthesizes the
-dialogue with edge-tts, renders with FFmpeg, uploads `final.mp4` to R2, and
-reports completion — so the finished video appears in the user's Runs.
+Standalone render worker for **Channelry** faceless videos, running as
+**disposable GitHub Actions compute** (ephemeral, dynamically-addressed
+runners). It polls the Cloudflare queue through the existing `render-workers`
+API, downloads the per-beat assets the job carries, chops character
+backgrounds out with RemBG, composes each scene (background + positioned
+characters), synthesizes the dialogue with edge-tts, renders with FFmpeg,
+uploads `final.mp4` to R2, and reports completion — so the finished video
+appears in the user's Runs.
 
 ```
 GitHub runner ─ HTTPS→ Cloudflare API (heartbeat/claim/progress/complete)
@@ -16,6 +18,10 @@ GitHub runner ─ HTTPS→ Cloudflare API (heartbeat/claim/progress/complete)
 addressed — it never depends on a stable/allowlisted IP, and Cloudflare never
 calls it. This is what lets a freshly-provisioned GitHub-hosted runner pick
 up a job and be destroyed right after.
+
+> Renderer-B is reserved for future heavy/independent workloads (3D, dense AI)
+> and is intentionally not touched yet. Renderer-A contains the complete
+> video pipeline including character background removal.
 
 ---
 
@@ -37,31 +43,6 @@ the new editor produces), plus the classic single-character `still` / `walk`
 methods (`settings.method`, `settings.image_url`). Other job kinds are
 reported `failed` with a clear “unsupported render method” reason rather than
 hanging.
-
-### Talking-head mode: `sadtalker` (photo + audio -> talking head)
-
-A job with ``settings.method == "sadtalker"`` (and ``USE_SADTALKER=1`` in the
-runner environment) renders a still photo + driving audio into a talking-head
-video (lip movement + head motion) using **SadTalker** (OpenTalker/SadTalker,
-Apache 2.0) on CPU:
-
-| Job setting | Purpose |
-|-------------|---------|
-| `settings.image_url` | Still source photo |
-| `settings.audio_url` | Driving audio (voice) |
-| `settings.dialogue` | Optional caption line for the snapshot |
-
-SadTalker bakes the driven audio into the output; the renderer then
-FFmpeg-normalizes it to the standard canvas as `final.mp4`.
-
-SadTalker is CPU-only, fits in 7 GB RAM, but is slow (~2-5 min per clip at
-`--size 256 --batch_size 1`). It runs on GitHub Actions free runners **only** —
-never the spaceworker VPS. Provisioning (torch CPU wheel, SadTalker repo clone,
-checkpoint downloads) happens at Docker image build time (Dockerfile) and in
-the GitHub Actions workflow (`.github/workflows/render.yml`).
-
-Env: `USE_SADTALKER=1`, `CHANNELRY_SADTALKER_DIR`, `CHANNELRY_SADTALKER_CHECKPOINT_DIR`,
-`CHANNELRY_SADTALKER_SIZE` (default 256), `CHANNELRY_SADTALKER_PREPROCESS` (default crop).
 
 ### Beat shape handled (matches the backend’s `body.beats` contract)
 
@@ -85,11 +66,11 @@ time** — the editor deliberately shows the untouched image (plan §6).
 
 ```bash
 cp .env.example .env   # fill in real values
-docker build -t channelry-render .
+docker build -t renderer-a .
 # long-running worker:
-docker run --env-file .env channelry-render
+docker run --env-file .env renderer-a
 # bounded batch (one job) then exit:
-docker run --env-file .env channelry-render --once
+docker run --env-file .env renderer-a --once
 ```
 
 ## Run locally without Docker (quick smoke test)

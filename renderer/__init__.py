@@ -1,4 +1,4 @@
-"""channelry-render — standalone self-hosted render worker.
+"""Renderer-A — Channelry video render worker (GitHub Actions disposable compute).
 
 Drives the Channelry render queue from the *outside*:
   claim job -> download assets -> background removal -> composite scenes

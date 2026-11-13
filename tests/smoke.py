@@ -70,7 +70,16 @@ def main():
         "settings": {
             "kind": "motion_video",
             "method": "character_video",
+            "music": "horror_piano",   # Class B: mix a music bed under dialogue
             "beats": [
+                {
+                    # Class B: title-card-first beat (no characters).
+                    "is_title_card": True,
+                    "background_url": "file://" + str(bg_path),
+                    "title": "The Haunted Hallway",
+                    "subtitle": "A Channelry test render",
+                    "duration": 4,
+                },
                 {
                     "background_url": "file://" + str(bg_path),
                     "characters": [
@@ -115,6 +124,13 @@ def main():
     print("STILL_URL:", url2)
     print("STILL_SNAPSHOT:", json.dumps(snap2, indent=2))
     print("STILL_SIZE:", os.path.getsize(still_out) if still_out.exists() else "missing")
+
+    # Class B: music mood maps to a real bed, and "none" does not.
+    from renderer import music as music_mod
+    bed = music_mod.synth_bed(2.0, "horror_piano", str(tmp / "bed.wav"))
+    print("MUSIC_BED:", bed if bed else "none")
+    none_bed = music_mod.synth_bed(2.0, "", str(tmp / "none.wav"))
+    print("MUSIC_NONE:", none_bed if none_bed else "none")
 
 
 if __name__ == "__main__":

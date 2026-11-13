@@ -30,7 +30,7 @@ def _request(url: str, method: str = "GET", body: dict | None = None, timeout: i
         data=data,
         method=method,
         headers={
-            "User-Agent": "channelry-render-worker/1.0",
+            "User-Agent": "renderer-a/1.0",
             "Accept": "application/json",
             "Content-Type": "application/json" if body is not None else "application/json",
             "Authorization": f"Bearer {config.WORKER_TOKEN}",
@@ -127,7 +127,7 @@ def download(url: str, dest_dir: str, filename: str) -> str:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not url:
         raise ValueError("empty download url")
-    req = urllib.request.Request(url, headers={"User-Agent": "channelry-render-worker/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "renderer-a/1.0"})
     with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as out:
         shutil.copyfileobj(resp, out)
     return str(dest)

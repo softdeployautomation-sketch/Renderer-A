@@ -73,6 +73,62 @@ def encode_scene_clip(
     return out_path
 
 
+def encode_frame_sequence(
+    frame_dir: str,
+    pattern: str,
+    fps: int,
+    audio_path: str | None,
+    out_path: str,
+    width: int,
+    height: int,
+) -> str:
+    """Encode an animated scene from an ordered PNG sequence (+ optional audio).
+
+    Added for character animation (2026-08-26): `render_character_video`
+    renders a real per-frame JPEG-sequence scene (mouth + body motion) instead
+    of a single still, so the dialogue clip has moving lips/lively characters.
+
+    The image sequence is finite (frames/fps seconds), so the output `-t` is
+    set to exactly that duration (not `-loop 1`). If a shorter audio file is
+    given the remainder plays as silent video; a longer audio file is cut at the
+    scene boundary — matching `encode_scene_clip`'s per-scene timing behavior.
+    """
+    import glob
+    import re as _re
+
+    # ffmpeg's image-sequence pattern is printf-style ("frame%05d.png"); glob
+    # treats '%' literally, so widen any %..d with '*', just for counting.
+    count_pattern = _re.sub(r"%\d*d", "*", pattern)
+    frames = sorted(glob.glob(os.path.join(frame_dir, count_pattern)))
+    if not frames:
+        raise RuntimeError(f"encode_frame_sequence: no frames matched {pattern!r} in {frame_dir}")
+    duration = len(frames) / max(1, int(fps))
+
+    cmd = ["ffmpeg", "-y", "-framerate", str(int(fps)), "-i", os.path.join(frame_dir, pattern)]
+    has_audio = audio_path is not None and os.path.exists(audio_path) and _probe_audio(audio_path)
+    if has_audio:
+        cmd += ["-i", audio_path]
+    cmd += [
+        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+               f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=#08080e,setsar=1,"
+               f"fps={int(fps)},format=yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+    ]
+    if has_audio:
+        cmd += ["-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2"]
+    cmd += ["-map", "0:v"]
+    if has_audio:
+        cmd += ["-map", "1:a"]
+    cmd += ["-t", f"{duration:.3f}", "-movflags", "+faststart", out_path]
+    r = subprocess.run(cmd, capture_output=True, timeout=900)
+    if r.returncode != 0 or not os.path.exists(out_path):
+        raise RuntimeError(
+            "ffmpeg frame-sequence encode failed (rc=%s): %s"
+            % (r.returncode, r.stderr.decode('utf-8', 'replace')[-1500:])
+        )
+    return out_path
+
+
 def concat_clips(clip_paths: list, out_path: str, width: int, height: int) -> str:
     """Splice normalized clips into one output via the concat filter.
 

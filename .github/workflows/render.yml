@@ -1,4 +1,4 @@
-# channelry-render — GitHub-hosted ephemeral render runner
+# Renderer-A — GitHub-hosted ephemeral render runner
 # ---------------------------------------------------------------------------
 # A GitHub-hosted runner is freshly provisioned, dynamically addressed and
 # decommissioned after the job. This workflow therefore:
@@ -15,18 +15,19 @@
 name: Render queued Channelry jobs
 
 on:
-  workflow_dispatch:            # manual "Run workflow" button
-  schedule:
-    # Development/low-volume volume — poll the queue on an interval. Adjust
-    # (or remove for purely manual dispatch) once volume grows.
-    - cron: "*/10 * * * *"
+  workflow_dispatch:            # manual "Run workflow" button — the ONLY trigger
+  # No schedule trigger — runs only when the user or the Worker dispatches it.
+  # The Cloudflare Worker wakes this via workflow_dispatch the moment a job
+  # is queued, so a schedule cron is unnecessary and wastes runner minutes.
 
 jobs:
   render:
     name: Render character videos
     runs-on: ubuntu-latest
     timeout-minutes: 120     # never let an ephemeral runner be abused
-    concurrency: 1            # one runner at a time per repo
+    concurrency:
+      group: renderer-a-render
+      cancel-in-progress: false
 
     steps:
       - name: Checkout renderer
@@ -78,8 +79,8 @@ jobs:
           CHANNELRY_RENDER_WORKER_TOKEN: ${{ secrets.CHANNELRY_RENDER_WORKER_TOKEN }}
           # Ephemeral runner identity — unique per workflow run so the queue
           # sees a distinct renderer each time (never a shared/stale worker).
-          CHANNELRY_RENDER_WORKER_ID: github-runner-${{ github.run_id }}
-          CHANNELRY_RENDER_WORKER_NAME: github-runner-${{ github.run_id }}
+          CHANNELRY_RENDER_WORKER_ID: renderer-a-${{ github.run_id }}
+          CHANNELRY_RENDER_WORKER_NAME: renderer-a-${{ github.run_id }}
           CHANNELRY_R2_ENDPOINT: ${{ secrets.CHANNELRY_R2_ENDPOINT }}
           CHANNELRY_R2_BUCKET: ${{ secrets.CHANNELRY_R2_BUCKET }}
           CHANNELRY_R2_ACCESS_KEY_ID: ${{ secrets.CHANNELRY_R2_ACCESS_KEY_ID }}
@@ -90,7 +91,13 @@ jobs:
           USE_SADTALKER: "1"
           CHANNELRY_SADTALKER_DIR: vendor/SadTalker
         run: |
-          # Render up to 3 jobs or up to 45 minutes, then stop so the
-          # ephemeral runner is reaped cleanly.
-          python -m renderer.main --max-jobs 3 --max-seconds 2700
+          # Drain the queue FIFO (claim returns the OLDEST queued job first),
+          # one after another until the queue is empty. max-jobs 1000 is
+          # effectively "all of them" (a realistic cap well above volume); the
+          # batch stops when the queue has been empty for 5 consecutive polls
+          # (~15s) or the 45-minute max-seconds safety cap is hit. The Worker
+          # dispatches this workflow the moment a job is queued (GITHUB_PAT
+          # wake), so a freshly queued job starts rendering immediately, and
+          # this run keeps going to drain whatever else is already queued.
+          python -m renderer.main --max-jobs 1000 --max-seconds 2700 --max-empty 5
           echo "render batch finished"

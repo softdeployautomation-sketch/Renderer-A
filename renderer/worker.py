@@ -20,12 +20,13 @@ log = logging.getLogger("render.worker")
 # can later select a capable renderer (plan §25) without the frontend caring.
 # "sadtalker" is only exercised when USE_SADTALKER=1 (provisioned on the
 # runner) and the job sets settings.method == "sadtalker" (per-job opt-in).
-SUPPORTED_METHODS = ("character_video", "still", "walk", "sadtalker", "text_to_video")
+SUPPORTED_METHODS = ("character_video", "still", "walk", "character_cutout", "sadtalker")
 
 
 def capabilities() -> dict:
     return {
         "runner": "github-actions",
+        "renderer_id": "renderer-a",
         "rembg": backend_name(),
         "methods": list(SUPPORTED_METHODS),
         "renderer_type": "cpu-ffmpeg",
@@ -43,14 +44,21 @@ def handle_job(job: dict) -> None:
     cloud.report(job_id, "rendering", 2, progress_step="asset download")
 
     try:
+        if method == "character_cutout":
+            # pure image cutout -> transparent PNG -> R2 (no video/voice/ffmpeg)
+            url, snapshot = render.render_character_cutout(job_id, job)
+            cloud.report(
+                job_id, "done", 100, "uploading cutout",
+                video_url=url, scene_snapshot=snapshot,
+            )
+            log.info("job %s CUTOUT COMPLETED -> %s", job_id, url)
+            return
         if method == "character_video":
             url, snapshot = render.render_character_video(job_id, job)
         elif method in ("still", "walk"):
             url, snapshot = render.render_single_character(job_id, job, method)
         elif method == "sadtalker":
             url, snapshot = render.render_sadtalker(job_id, job)
-        elif method == "text_to_video":
-            url, snapshot = render.render_text_to_video(job_id, job)
         else:
             cloud.report(
                 job_id, "failed", 100,
@@ -94,25 +102,37 @@ def run_forever(poll_seconds: float | None = None) -> None:
         time.sleep(poll)
 
 
-def run_batch(max_jobs: int, max_seconds: float) -> int:
-    """Render up to `max_jobs` / `max_seconds`, then exit.
+def run_batch(max_jobs: int, max_seconds: float, max_empty: int = 6) -> int:
+    """Render up to `max_jobs` / `max_seconds` / `max_empty`, whichever hits first.
 
     Ideal for an ephemeral GitHub-hosted runner: heartbeat + claim + render
     whatever is available, then end so the job finishes and the VM is torn
-    down. Returns how many jobs were handled.
+    down. `max_empty` stops after that many consecutive empty claims so an
+    empty queue exits in ~15s instead of burning the whole `max_seconds` cap
+    polling nothing. Returns how many jobs were handled.
     """
     handled = 0
+    empty_streak = 0
     start = time.monotonic()
     log.info(
-        "render batch started (id=%s, rembg=%s, max_jobs=%d, max_seconds=%.0f)",
-        config.WORKER_ID, backend_name(), max_jobs, max_seconds,
+        "render batch started (id=%s, rembg=%s, max_jobs=%d, max_seconds=%.0f, max_empty=%d)",
+        config.WORKER_ID, backend_name(), max_jobs, max_seconds, max_empty,
     )
     while handled < max_jobs and (time.monotonic() - start) < max_seconds:
         try:
             if run_once():
                 handled += 1
+                empty_streak = 0
+            else:
+                empty_streak += 1
+                if max_empty and empty_streak >= max_empty:
+                    log.info(
+                        "queue empty for %d consecutive polls — stopping early (id=%s)",
+                        empty_streak, config.WORKER_ID,
+                    )
+                    break
         except Exception:  # noqa: BLE001
             log.error("worker iteration failed:\n%s", traceback.format_exc())
         time.sleep(config.POLL_SECONDS)
-    log.info("batch finished — handled %d job(s)", handled)
+    log.info("batch finished — handled %d job(s), id=%s", handled, config.WORKER_ID)
     return handled
